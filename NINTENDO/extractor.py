@@ -51,12 +51,12 @@ async def discover_listing() -> list[str]:
     urls: list[str] = []
     for a in soup.find_all("a", href=True):
         href = a["href"]
-        if re.match(r"^/au/news-and-articles/[^/]+/?$", href):
+        if re.match(r"^/au/news-and-articles/[a-z0-9][a-z0-9-]*/?$", href):
             full = f"https://www.nintendo.com{href.rstrip('/')}/"
             if full not in seen:
                 seen.add(full)
                 urls.append(full)
-        elif re.match(r"^https://www\.nintendo\.com/au/news-and-articles/[^/]+/?$", href):
+        elif re.match(r"^https://www\.nintendo\.com/au/news-and-articles/[a-z0-9][a-z0-9-]*/?$", href):
             full = href.rstrip("/") + "/"
             if full not in seen:
                 seen.add(full)
@@ -143,6 +143,11 @@ async def extract(url: str, *, use_cache: bool = True) -> Article:
 
 
 def _extract_body(soup: BeautifulSoup, base_url: str) -> Optional[str]:
+    # Strip known chrome from the whole document first
+    for tag in soup.find_all(["script", "style", "nav", "header", "footer", "aside"]):
+        tag.decompose()
+
+    # Try specific selectors — require at least one <p> so we don't grab empty shells
     for selector in (
         "[class*='articleBody']",
         "[class*='article-body']",
@@ -155,37 +160,20 @@ def _extract_body(soup: BeautifulSoup, base_url: str) -> Optional[str]:
         "main article",
     ):
         el = soup.select_one(selector)
-        if el:
-            el = _clean(el)
+        if el and el.find("p"):
             text = el.decode_contents().strip()
             if len(text) > 200:
                 return text
 
-    # Last-resort: find the <main> sub-element with the most paragraph text
-    main = soup.select_one("main")
-    if main:
-        main = _clean(main)
-        # Pick the direct child block with the most text
-        best, best_len = None, 0
-        for child in main.find_all(["section", "div"], recursive=False):
-            _clean(child)
-            t = child.get_text(strip=True)
-            if len(t) > best_len:
-                best, best_len = child, len(t)
-        if best and best_len > 200:
-            return best.decode_contents().strip()
+    # Fallback: pick the element with the most paragraph text
+    best, best_len = None, 0
+    for el in soup.find_all(["section", "div", "main"]):
+        para_text = " ".join(p.get_text(strip=True) for p in el.find_all("p"))
+        if len(para_text) > best_len:
+            best, best_len = el, len(para_text)
+    if best and best_len > 200:
+        return best.decode_contents().strip()
     return None
-
-
-def _clean(el):
-    for tag in el.find_all(["script", "style", "nav", "header", "footer", "aside"]):
-        tag.decompose()
-    # Remove elements that look like menus (many sibling links with short text)
-    for tag in el.find_all(True):
-        links = tag.find_all("a", recursive=False)
-        if len(links) >= 5 and all(len(a.get_text(strip=True)) < 40 for a in links):
-            tag.decompose()
-    return el
 
 
 def _meta(soup: BeautifulSoup, name: str) -> Optional[str]:
