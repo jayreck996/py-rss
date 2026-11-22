@@ -219,8 +219,7 @@ async def run_anthropic(test_version: int | None = None) -> None:
         try:
             article = await extract(url, use_cache=False)
             if not article.published_at:
-                print(f"[ANTHROPIC]     Skipped (no published_at)")
-                continue
+                article.published_at = date.today().isoformat()
             try:
                 pub_date = date.fromisoformat(article.published_at[:10])
                 if pub_date < date.today() - timedelta(days=WINDOW_DAYS):
