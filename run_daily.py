@@ -1,0 +1,503 @@
+"""
+Aggregated daily fetch: Anthropic, OpenAI, Coinbase.
+Each source runs independently — a failure in one does not stop the others.
+Writes per-source XML feeds to the XML/ submodule and a combined feed for Pages.
+"""
+
+import argparse
+import asyncio
+import json
+import re
+import shutil
+import sys
+import urllib.request
+from datetime import date, datetime, timedelta
+from email.utils import format_datetime, parsedate_to_datetime
+from pathlib import Path
+from urllib.parse import urlencode, urlparse
+import html as html_module
+from xml.etree.ElementTree import Element, SubElement, tostring
+from xml.dom.minidom import parseString
+
+from bs4 import BeautifulSoup
+
+from ANTHROPIC.claude import CATEGORY_API, LISTING_URL as ANTHROPIC_URL, is_article_url, listing_resources
+from COINBASE.extractor import discover_listing as coinbase_discover_listing
+
+WINDOW_DAYS = 7
+DATA_DIR = Path("data")
+
+OPENAI_RSS_URL = "https://openai.com/news/rss.xml"
+
+
+# ---------------------------------------------------------------------------
+# Shared utilities
+# ---------------------------------------------------------------------------
+
+def url_to_slug(url: str) -> str:
+    path = urlparse(url).path.strip("/")
+    return re.sub(r"[^a-zA-Z0-9_-]", "-", path)
+
+
+def _body_to_html(text: str, cover_url: str = "") -> str:
+    if not text.strip().startswith("<"):
+        raise ValueError("Structured article HTML is required")
+    inline_bases = {u.split("?")[0] for u in re.findall(r'<img[^>]+src=["\']([^"\']+)', text)}
+    cover_html = ""
+    if cover_url and cover_url.split("?")[0] not in inline_bases:
+        cover_html = (
+            f'<img src="{html_module.escape(cover_url, quote=True)}" '
+            'style="max-width:100%;display:block;margin-bottom:1em">'
+        )
+    return cover_html + text
+
+
+def _write_feed(rss: Element, destination: Path) -> None:
+    xml_str = parseString(tostring(rss, encoding="unicode")).toprettyxml(indent="  ")
+    xml_str = xml_str.replace("&lt;![CDATA[", "<![CDATA[").replace("]]&gt;", "]]>")
+    xml_str = re.sub(
+        r"<!\[CDATA\[(.*?)]]>",
+        lambda m: f"<![CDATA[{html_module.unescape(m.group(1))}]]>",
+        xml_str,
+        flags=re.DOTALL,
+    )
+    destination.write_text(xml_str, encoding="utf-8")
+
+
+def _build_rss(title: str, link: str, description: str, self_href: str) -> tuple[Element, Element, Element]:
+    rss = Element("rss", version="2.0")
+    rss.set("xmlns:atom", "http://www.w3.org/2005/Atom")
+    rss.set("xmlns:content", "http://purl.org/rss/1.0/modules/content/")
+    channel = SubElement(rss, "channel")
+    SubElement(channel, "title").text = title
+    SubElement(channel, "link").text = link
+    SubElement(channel, "description").text = description
+    SubElement(channel, "language").text = "en"
+    atom_link = SubElement(channel, "atom:link")
+    atom_link.set("href", self_href)
+    atom_link.set("rel", "self")
+    atom_link.set("type", "application/rss+xml")
+    return rss, channel, atom_link
+
+
+def _add_items(channel: Element, articles: list[dict]) -> None:
+    for a in articles:
+        item = SubElement(channel, "item")
+        SubElement(item, "title").text = a.get("title") or "Untitled"
+        SubElement(item, "link").text = a.get("url", "")
+        SubElement(item, "guid", isPermaLink="false").text = a.get("url", "")
+        SubElement(item, "description").text = a.get("summary") or ""
+        body = a.get("body_text", "")
+        cover = (a.get("cover_image") or {}).get("url", "")
+        if body:
+            try:
+                html_body = _body_to_html(body, cover)
+                encoded = SubElement(item, "content:encoded")
+                encoded.text = f"<![CDATA[{html_body}]]>"
+            except ValueError:
+                pass
+        if a.get("published_at"):
+            try:
+                dt = datetime.fromisoformat(a["published_at"].replace("Z", "+00:00"))
+                SubElement(item, "pubDate").text = format_datetime(dt)
+            except Exception:
+                pass
+        if cover:
+            enc = SubElement(item, "enclosure")
+            enc.set("url", cover)
+            enc.set("type", "image/jpeg")
+            enc.set("length", "0")
+
+
+def _cleanup_old_data(data_dir: Path) -> None:
+    if not data_dir.exists():
+        return
+    cutoff = date.today() - timedelta(days=WINDOW_DAYS)
+    for day_dir in sorted(data_dir.iterdir()):
+        if not day_dir.is_dir():
+            continue
+        try:
+            if date.fromisoformat(day_dir.name) < cutoff:
+                shutil.rmtree(day_dir)
+                print(f"Removed expired data: {day_dir}")
+        except ValueError:
+            pass
+
+
+def _load_articles(data_dir: Path) -> list[dict]:
+    articles = []
+    for f in sorted(data_dir.glob("**/*.json"), reverse=True):
+        try:
+            article = json.loads(f.read_text(encoding="utf-8"))
+            body = article.get("body_text") or ""
+            if not isinstance(body, str) or not body.strip().startswith("<"):
+                print(f"Skipped {f.name}: structured article HTML is missing")
+                continue
+            articles.append(article)
+        except Exception:
+            continue
+    return articles
+
+
+# ---------------------------------------------------------------------------
+# ANTHROPIC runner
+# ---------------------------------------------------------------------------
+
+def _anthropic_read_listing() -> tuple[list, int]:
+    req = urllib.request.Request(ANTHROPIC_URL, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=30) as response:
+        return listing_resources(response.read().decode("utf-8"))
+
+
+def _anthropic_read_page(page_number: int) -> tuple[list, int]:
+    query = urlencode({"page": page_number, "language": "en", "type": "articles"})
+    req = urllib.request.Request(
+        CATEGORY_API + "?" + query,
+        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json", "Referer": ANTHROPIC_URL},
+    )
+    with urllib.request.urlopen(req, timeout=30) as response:
+        data = json.load(response)
+    if not isinstance(data.get("items"), list) or not isinstance(data.get("total"), int):
+        raise ValueError("Claude pagination returned an invalid resource page")
+    return data["items"], data["total"]
+
+
+async def _discover_anthropic() -> list[str]:
+    items, total = _anthropic_read_listing()
+    cutoff = date.today() - timedelta(days=WINDOW_DAYS)
+    urls: list[str] = []
+    seen: set[str] = set()
+    seen_pages: set[tuple] = set()
+    page_number = 1
+    while items:
+        signature = tuple((item.get("slug"), item.get("externalUrl"), item.get("date")) for item in items)
+        if signature in seen_pages:
+            raise ValueError("Claude article pagination did not advance")
+        seen_pages.add(signature)
+        reached_cutoff = False
+        for item in items:
+            published = item.get("date")
+            if not published:
+                continue
+            if date.fromisoformat(published[:10]) < cutoff:
+                reached_cutoff = True
+                continue
+            if item.get("externalUrl"):
+                continue
+            slug = item.get("slug")
+            if not isinstance(slug, str):
+                continue
+            url = ANTHROPIC_URL + "/" + slug
+            if is_article_url(url) and url not in seen:
+                seen.add(url)
+                urls.append(url)
+        if reached_cutoff or page_number >= total:
+            break
+        page_number += 1
+        items, total = _anthropic_read_page(page_number)
+    return urls
+
+
+async def run_anthropic(test_version: int | None = None) -> list[dict]:
+    from ANTHROPIC.extractor import extract
+
+    data_dir = DATA_DIR / "ANTHROPIC"
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n[ANTHROPIC] Discovering: {ANTHROPIC_URL}")
+    urls = await _discover_anthropic()
+    print(f"[ANTHROPIC] Found {len(urls)} links")
+
+    today = date.today().isoformat()
+    out_dir = data_dir / today
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for url in urls:
+        print(f"[ANTHROPIC]   -> {url}")
+        try:
+            article = await extract(url, use_cache=False)
+            if not article.published_at:
+                print(f"[ANTHROPIC]     Skipped (no published_at)")
+                continue
+            try:
+                pub_date = date.fromisoformat(article.published_at[:10])
+                if pub_date < date.today() - timedelta(days=WINDOW_DAYS):
+                    print(f"[ANTHROPIC]     Skipped (older than {WINDOW_DAYS} days)")
+                    continue
+            except ValueError:
+                pass
+            slug = url_to_slug(url)
+            dest = out_dir / f"{slug}.json"
+            dest.write_text(article.model_dump_json(indent=2), encoding="utf-8")
+            print(f"[ANTHROPIC]     Saved: {dest.name}")
+        except Exception as exc:
+            print(f"[ANTHROPIC]     ERROR: {exc}", file=sys.stderr)
+
+    _cleanup_old_data(data_dir)
+    articles = _load_articles(data_dir)
+
+    rss, channel, atom_link = _build_rss(
+        "Claude Articles",
+        ANTHROPIC_URL,
+        "Latest Claude articles from Anthropic",
+        "https://jayreck996.github.io/py-rss/anthropic.xml",
+    )
+    _add_items(channel, articles)
+    feed_path = Path("XML/ANTHROPIC/XML-2026Q4.xml")
+    feed_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_feed(rss, feed_path)
+    print(f"[ANTHROPIC] Feed updated: {len(articles)} item(s) -> {feed_path}")
+
+    if test_version is not None:
+        test_name = f"feed_v{test_version}_anthropic.xml"
+        atom_link.set("href", atom_link.get("href").rsplit("/", 1)[0] + "/" + test_name)
+        for guid in channel.findall("item/guid"):
+            guid.text += f"#v{test_version}"
+        _write_feed(rss, Path(test_name))
+
+    return articles
+
+
+# ---------------------------------------------------------------------------
+# OPENAI runner
+# ---------------------------------------------------------------------------
+
+def _discover_openai() -> list[tuple[str, str]]:
+    req = urllib.request.Request(
+        OPENAI_RSS_URL,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; RSS reader)"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        content = resp.read()
+    soup = BeautifulSoup(content, "xml")
+    cutoff = date.today() - timedelta(days=WINDOW_DAYS)
+    seen: set[str] = set()
+    items: list[tuple[str, str]] = []
+    for item in soup.find_all("item"):
+        link_tag = item.find("link")
+        pub_tag = item.find("pubDate")
+        if not link_tag:
+            continue
+        url = link_tag.text.strip().rstrip("/")
+        path = urlparse(url).path.rstrip("/")
+        if not re.match(r"^/(index|blog|research)/[^/]+$", path):
+            continue
+        pub_iso = ""
+        if pub_tag:
+            try:
+                dt = parsedate_to_datetime(pub_tag.text)
+                if dt.date() < cutoff:
+                    break
+                pub_iso = dt.date().isoformat()
+            except Exception:
+                pass
+        if url not in seen:
+            seen.add(url)
+            items.append((url, pub_iso))
+    return items
+
+
+async def run_openai(test_version: int | None = None) -> list[dict]:
+    from OPENAI.extractor import extract
+
+    data_dir = DATA_DIR / "OPENAI"
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n[OPENAI] Discovering from RSS: {OPENAI_RSS_URL}")
+    found = _discover_openai()
+    print(f"[OPENAI] Found {len(found)} links")
+    rss_dates = {url: pub_iso for url, pub_iso in found}
+    urls = list(dict.fromkeys(url for url, _ in found))
+
+    today = date.today().isoformat()
+    out_dir = data_dir / today
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for url in urls:
+        print(f"[OPENAI]   -> {url}")
+        try:
+            article = await extract(url, use_cache=False)
+            blocked = (
+                not article.title
+                or "Verification successful" in (article.body_text or "")
+                or "Waiting for openai.com" in (article.body_text or "")
+            )
+            if blocked:
+                print(f"[OPENAI]     Skipped (Cloudflare blocked)")
+                continue
+            if not article.published_at and rss_dates.get(url):
+                article.published_at = rss_dates[url]
+            if article.published_at:
+                try:
+                    pub_date = date.fromisoformat(article.published_at[:10])
+                    if pub_date < date.today() - timedelta(days=WINDOW_DAYS):
+                        print(f"[OPENAI]     Skipped (older than {WINDOW_DAYS} days)")
+                        continue
+                except ValueError:
+                    pass
+            slug = url_to_slug(url)
+            dest = out_dir / f"{slug}.json"
+            dest.write_text(article.model_dump_json(indent=2), encoding="utf-8")
+            print(f"[OPENAI]     Saved: {dest.name}")
+        except Exception as exc:
+            print(f"[OPENAI]     ERROR: {exc}", file=sys.stderr)
+
+    _cleanup_old_data(data_dir)
+    articles = _load_articles(data_dir)
+
+    rss, channel, atom_link = _build_rss(
+        "OpenAI News",
+        "https://openai.com/news/",
+        "Latest articles from OpenAI",
+        "https://jayreck996.github.io/py-rss/openai.xml",
+    )
+    _add_items(channel, articles)
+    feed_path = Path("XML/OPENAI/XML-2026Q4.xml")
+    feed_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_feed(rss, feed_path)
+    print(f"[OPENAI] Feed updated: {len(articles)} item(s) -> {feed_path}")
+
+    if test_version is not None:
+        test_name = f"feed_v{test_version}_openai.xml"
+        atom_link.set("href", atom_link.get("href").rsplit("/", 1)[0] + "/" + test_name)
+        for guid in channel.findall("item/guid"):
+            guid.text += f"#v{test_version}"
+        _write_feed(rss, Path(test_name))
+
+    return articles
+
+
+# ---------------------------------------------------------------------------
+# COINBASE runner
+# ---------------------------------------------------------------------------
+
+async def run_coinbase(test_version: int | None = None) -> list[dict]:
+    from COINBASE.extractor import extract
+
+    data_dir = DATA_DIR / "COINBASE"
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n[COINBASE] Discovering from: https://www.coinbase.com/blog")
+    found = await coinbase_discover_listing()
+    print(f"[COINBASE] Found {len(found)} links")
+
+    today = date.today().isoformat()
+    out_dir = data_dir / today
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for url in found:
+        print(f"[COINBASE]   -> {url}")
+        try:
+            article = await extract(url, use_cache=False)
+            if article.published_at:
+                try:
+                    pub_date = date.fromisoformat(article.published_at[:10])
+                    if pub_date < date.today() - timedelta(days=WINDOW_DAYS):
+                        print(f"[COINBASE]     Skipped (older than {WINDOW_DAYS} days)")
+                        continue
+                except ValueError:
+                    pass
+            slug = url_to_slug(url)
+            dest = out_dir / f"{slug}.json"
+            dest.write_text(article.model_dump_json(indent=2), encoding="utf-8")
+            print(f"[COINBASE]     Saved: {dest.name}")
+        except Exception as exc:
+            print(f"[COINBASE]     ERROR: {exc}", file=sys.stderr)
+
+    _cleanup_old_data(data_dir)
+    articles = _load_articles(data_dir)
+
+    rss, channel, atom_link = _build_rss(
+        "Coinbase Blog",
+        "https://www.coinbase.com/blog",
+        "Latest articles from Coinbase",
+        "https://jayreck996.github.io/py-rss/coinbase.xml",
+    )
+    _add_items(channel, articles)
+    feed_path = Path("XML/COINBASE/XML-2026Q4.xml")
+    feed_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_feed(rss, feed_path)
+    print(f"[COINBASE] Feed updated: {len(articles)} item(s) -> {feed_path}")
+
+    if test_version is not None:
+        test_name = f"feed_v{test_version}_coinbase.xml"
+        atom_link.set("href", atom_link.get("href").rsplit("/", 1)[0] + "/" + test_name)
+        for guid in channel.findall("item/guid"):
+            guid.text += f"#v{test_version}"
+        _write_feed(rss, Path(test_name))
+
+    return articles
+
+
+# ---------------------------------------------------------------------------
+# Combined feed
+# ---------------------------------------------------------------------------
+
+def _generate_combined_feed(all_articles: list[dict], test_version: int | None = None) -> None:
+    def _pub_key(a: dict) -> str:
+        return a.get("published_at") or ""
+
+    sorted_articles = sorted(all_articles, key=_pub_key, reverse=True)
+
+    rss, channel, atom_link = _build_rss(
+        "Tech Blog Aggregator",
+        "https://jayreck996.github.io/py-rss/",
+        "Anthropic, OpenAI and Coinbase articles aggregated",
+        "https://jayreck996.github.io/py-rss/feed.xml",
+    )
+    _add_items(channel, sorted_articles)
+    feed_path = Path("XML/COMBINED/XML-2026Q4.xml")
+    feed_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_feed(rss, feed_path)
+    print(f"\n[COMBINED] Feed updated: {len(sorted_articles)} item(s) -> {feed_path}")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+async def main(test_version: int | None = None, feed_only: bool = False) -> None:
+    if test_version is not None and test_version < 1:
+        raise ValueError("Test feed version must be a positive integer")
+
+    all_articles: list[dict] = []
+    failures: list[str] = []
+
+    if feed_only:
+        for source in ("ANTHROPIC", "OPENAI", "COINBASE"):
+            all_articles.extend(_load_articles(DATA_DIR / source))
+    else:
+        for name, coro in [
+            ("ANTHROPIC", run_anthropic(test_version)),
+            ("OPENAI", run_openai(test_version)),
+            ("COINBASE", run_coinbase(test_version)),
+        ]:
+            try:
+                articles = await coro
+                all_articles.extend(articles)
+            except Exception as exc:
+                print(f"\n[{name}] FAILED: {exc}", file=sys.stderr)
+                failures.append(name)
+
+    _generate_combined_feed(all_articles, test_version)
+
+    if failures:
+        print(f"\nFailed sources: {', '.join(failures)}", file=sys.stderr)
+        if len(failures) == 3:
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Aggregate RSS feeds from Anthropic, OpenAI, Coinbase.")
+    parser.add_argument("--feed-only", action="store_true", help="Rebuild feeds from saved data without fetching.")
+    parser.add_argument("--test-version", type=int, metavar="N")
+    args = parser.parse_args()
+    if args.test_version is not None and args.test_version < 1:
+        parser.error("--test-version must be a positive integer")
+    asyncio.run(main(args.test_version, args.feed_only))
