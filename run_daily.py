@@ -11,7 +11,7 @@ import re
 import shutil
 import sys
 import urllib.request
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from email.utils import format_datetime, parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import urlencode, urlparse
@@ -74,6 +74,7 @@ def _build_rss(title: str, link: str, description: str, self_href: str) -> tuple
     SubElement(channel, "link").text = link
     SubElement(channel, "description").text = description
     SubElement(channel, "language").text = "en"
+    SubElement(channel, "lastBuildDate").text = format_datetime(datetime.now(tz=timezone.utc))
     atom_link = SubElement(channel, "atom:link")
     atom_link.set("href", self_href)
     atom_link.set("rel", "self")
