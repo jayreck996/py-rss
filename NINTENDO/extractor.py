@@ -143,11 +143,10 @@ async def extract(url: str, *, use_cache: bool = True) -> Article:
 
 
 def _extract_body(soup: BeautifulSoup, base_url: str) -> Optional[str]:
-    # Strip known chrome from the whole document first
     for tag in soup.find_all(["script", "style", "nav", "header", "footer", "aside"]):
         tag.decompose()
 
-    # Try specific selectors — require at least one <p> so we don't grab empty shells
+    # Try specific selectors first
     for selector in (
         "[class*='articleBody']",
         "[class*='article-body']",
@@ -165,14 +164,20 @@ def _extract_body(soup: BeautifulSoup, base_url: str) -> Optional[str]:
             if len(text) > 200:
                 return text
 
-    # Fallback: pick the element with the most paragraph text
-    best, best_len = None, 0
-    for el in soup.find_all(["section", "div", "main"]):
-        para_text = " ".join(p.get_text(strip=True) for p in el.find_all("p"))
-        if len(para_text) > best_len:
-            best, best_len = el, len(para_text)
-    if best and best_len > 200:
-        return best.decode_contents().strip()
+    # Fallback: walk UP from substantive paragraphs to find their tightest container.
+    # Paragraphs with real content (>60 chars) share a close ancestor; nav text does not.
+    paras = [p for p in soup.find_all("p") if len(p.get_text(strip=True)) > 60]
+    if len(paras) < 2:
+        return None
+    threshold = max(2, int(len(paras) * 0.6))
+    for ancestor in paras[0].parents:
+        if ancestor.name in ("body", "html", None):
+            break
+        if sum(1 for p in paras if ancestor in list(p.parents)) >= threshold:
+            text = ancestor.decode_contents().strip()
+            if len(text) > 200:
+                return text
+            break
     return None
 
 
