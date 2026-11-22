@@ -147,19 +147,45 @@ def _extract_body(soup: BeautifulSoup, base_url: str) -> Optional[str]:
         "[class*='articleBody']",
         "[class*='article-body']",
         "[class*='ArticleBody']",
+        "[class*='article-content']",
+        "[class*='ArticleContent']",
+        "[class*='news-body']",
+        "[class*='NewsBody']",
         "article",
         "main article",
-        "[class*='content']",
-        "main",
     ):
         el = soup.select_one(selector)
         if el:
-            for tag in el.find_all(["script", "style", "nav", "header", "footer", "aside"]):
-                tag.decompose()
+            el = _clean(el)
             text = el.decode_contents().strip()
             if len(text) > 200:
                 return text
+
+    # Last-resort: find the <main> sub-element with the most paragraph text
+    main = soup.select_one("main")
+    if main:
+        main = _clean(main)
+        # Pick the direct child block with the most text
+        best, best_len = None, 0
+        for child in main.find_all(["section", "div"], recursive=False):
+            _clean(child)
+            t = child.get_text(strip=True)
+            if len(t) > best_len:
+                best, best_len = child, len(t)
+        if best and best_len > 200:
+            return best.decode_contents().strip()
     return None
+
+
+def _clean(el):
+    for tag in el.find_all(["script", "style", "nav", "header", "footer", "aside"]):
+        tag.decompose()
+    # Remove elements that look like menus (many sibling links with short text)
+    for tag in el.find_all(True):
+        links = tag.find_all("a", recursive=False)
+        if len(links) >= 5 and all(len(a.get_text(strip=True)) < 40 for a in links):
+            tag.decompose()
+    return el
 
 
 def _meta(soup: BeautifulSoup, name: str) -> Optional[str]:
