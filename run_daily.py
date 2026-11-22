@@ -198,7 +198,7 @@ async def _discover_anthropic() -> list[str]:
     return urls
 
 
-async def run_anthropic(test_version: int | None = None) -> list[dict]:
+async def run_anthropic(test_version: int | None = None) -> None:
     from ANTHROPIC.extractor import extract
 
     data_dir = DATA_DIR / "ANTHROPIC"
@@ -257,8 +257,6 @@ async def run_anthropic(test_version: int | None = None) -> list[dict]:
             guid.text += f"#v{test_version}"
         _write_feed(rss, Path(test_name))
 
-    return articles
-
 
 # ---------------------------------------------------------------------------
 # OPENAI runner
@@ -299,7 +297,7 @@ def _discover_openai() -> list[tuple[str, str]]:
     return items
 
 
-async def run_openai(test_version: int | None = None) -> list[dict]:
+async def run_openai(test_version: int | None = None) -> None:
     from OPENAI.extractor import extract
 
     data_dir = DATA_DIR / "OPENAI"
@@ -368,14 +366,12 @@ async def run_openai(test_version: int | None = None) -> list[dict]:
             guid.text += f"#v{test_version}"
         _write_feed(rss, Path(test_name))
 
-    return articles
-
 
 # ---------------------------------------------------------------------------
 # COINBASE runner
 # ---------------------------------------------------------------------------
 
-async def run_coinbase(test_version: int | None = None) -> list[dict]:
+async def run_coinbase(test_version: int | None = None) -> None:
     from COINBASE.extractor import extract
 
     data_dir = DATA_DIR / "COINBASE"
@@ -432,31 +428,6 @@ async def run_coinbase(test_version: int | None = None) -> list[dict]:
             guid.text += f"#v{test_version}"
         _write_feed(rss, Path(test_name))
 
-    return articles
-
-
-# ---------------------------------------------------------------------------
-# Combined feed
-# ---------------------------------------------------------------------------
-
-def _generate_combined_feed(all_articles: list[dict], test_version: int | None = None) -> None:
-    def _pub_key(a: dict) -> str:
-        return a.get("published_at") or ""
-
-    sorted_articles = sorted(all_articles, key=_pub_key, reverse=True)
-
-    rss, channel, atom_link = _build_rss(
-        "Tech Blog Aggregator",
-        "https://jayreck996.github.io/py-rss/",
-        "Anthropic, OpenAI and Coinbase articles aggregated",
-        "https://jayreck996.github.io/py-rss/feed.xml",
-    )
-    _add_items(channel, sorted_articles)
-    feed_path = Path("XML/COMBINED/XML-2026Q4.xml")
-    feed_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_feed(rss, feed_path)
-    print(f"\n[COMBINED] Feed updated: {len(sorted_articles)} item(s) -> {feed_path}")
-
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -466,26 +437,18 @@ async def main(test_version: int | None = None, feed_only: bool = False) -> None
     if test_version is not None and test_version < 1:
         raise ValueError("Test feed version must be a positive integer")
 
-    all_articles: list[dict] = []
     failures: list[str] = []
 
-    if feed_only:
-        for source in ("ANTHROPIC", "OPENAI", "COINBASE"):
-            all_articles.extend(_load_articles(DATA_DIR / source))
-    else:
-        for name, coro in [
-            ("ANTHROPIC", run_anthropic(test_version)),
-            ("OPENAI", run_openai(test_version)),
-            ("COINBASE", run_coinbase(test_version)),
-        ]:
-            try:
-                articles = await coro
-                all_articles.extend(articles)
-            except Exception as exc:
-                print(f"\n[{name}] FAILED: {exc}", file=sys.stderr)
-                failures.append(name)
-
-    _generate_combined_feed(all_articles, test_version)
+    for name, coro in [
+        ("ANTHROPIC", run_anthropic(test_version)),
+        ("OPENAI", run_openai(test_version)),
+        ("COINBASE", run_coinbase(test_version)),
+    ]:
+        try:
+            await coro
+        except Exception as exc:
+            print(f"\n[{name}] FAILED: {exc}", file=sys.stderr)
+            failures.append(name)
 
     if failures:
         print(f"\nFailed sources: {', '.join(failures)}", file=sys.stderr)

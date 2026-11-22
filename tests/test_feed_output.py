@@ -32,39 +32,32 @@ class FeedOutputTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-    def _patch(self):
-        return patch.object(run_daily, "DATA_DIR", self.root / "data"), \
-               patch.object(run_daily, "Path", side_effect=lambda name: self.root / name)
+    def _write_source_feed(self, source: str) -> Path:
+        articles = run_daily._load_articles(self.root / "data" / source)
+        rss, channel, _ = run_daily._build_rss("T", "http://x", "D", "http://x/feed.xml")
+        run_daily._add_items(channel, articles)
+        feed_path = self.root / "XML" / source / "XML-2026Q4.xml"
+        feed_path.parent.mkdir(parents=True, exist_ok=True)
+        run_daily._write_feed(rss, feed_path)
+        return feed_path
 
-    def test_per_source_feeds_written(self):
-        p1, p2 = self._patch()
-        with p1, p2:
-            articles = run_daily._load_articles(self.root / "data" / "ANTHROPIC")
-            rss, channel, _ = run_daily._build_rss("T", "http://x", "D", "http://x/feed.xml")
-            run_daily._add_items(channel, articles)
-            feed_path = self.root / "XML" / "ANTHROPIC" / "XML-2026Q4.xml"
-            feed_path.parent.mkdir(parents=True, exist_ok=True)
-            run_daily._write_feed(rss, feed_path)
+    def test_per_source_feed_written(self):
+        feed_path = self._write_source_feed("ANTHROPIC")
         tree = ET.parse(feed_path)
         self.assertEqual(tree.findtext("./channel/item/guid"), self.urls["ANTHROPIC"])
 
-    def test_combined_feed_merges_all_sources(self):
-        all_articles = []
+    def test_all_three_sources_produce_feeds(self):
         for source in ("ANTHROPIC", "OPENAI", "COINBASE"):
-            all_articles.extend(run_daily._load_articles(self.root / "data" / source))
-        with patch.object(run_daily, "Path", side_effect=lambda name: self.root / name):
-            run_daily._generate_combined_feed(all_articles)
-        combined = ET.parse(self.root / "XML" / "COMBINED" / "XML-2026Q4.xml")
-        guids = {item.text for item in combined.findall("./channel/item/guid")}
-        self.assertEqual(guids, set(self.urls.values()))
+            feed_path = self._write_source_feed(source)
+            tree = ET.parse(feed_path)
+            self.assertEqual(tree.findtext("./channel/item/guid"), self.urls[source])
 
-    def test_source_failure_does_not_affect_combined(self):
-        all_articles = run_daily._load_articles(self.root / "data" / "ANTHROPIC")
-        with patch.object(run_daily, "Path", side_effect=lambda name: self.root / name):
-            run_daily._generate_combined_feed(all_articles)
-        combined = ET.parse(self.root / "XML" / "COMBINED" / "XML-2026Q4.xml")
-        items = combined.findall("./channel/item")
+    def test_source_failure_does_not_affect_others(self):
+        feed_path = self._write_source_feed("OPENAI")
+        tree = ET.parse(feed_path)
+        items = tree.findall("./channel/item")
         self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].findtext("guid"), self.urls["OPENAI"])
 
     def test_invalid_version_raises(self):
         with self.assertRaises(ValueError):
