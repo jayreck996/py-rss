@@ -1,7 +1,7 @@
 """
-Aggregated daily fetch: Anthropic, OpenAI, Coinbase.
+Aggregated daily fetch: Anthropic, OpenAI, Coinbase, Nintendo.
 Each source runs independently — a failure in one does not stop the others.
-Writes per-source XML feeds to the XML/ submodule and a combined feed for Pages.
+Writes per-source XML feeds to the XML/ submodule for Pages.
 """
 
 import argparse
@@ -23,6 +23,7 @@ from bs4 import BeautifulSoup
 
 from ANTHROPIC.claude import CATEGORY_API, LISTING_URL as ANTHROPIC_URL, is_article_url, listing_resources
 from COINBASE.extractor import discover_listing as coinbase_discover_listing
+from NINTENDO.extractor import discover_listing as nintendo_discover_listing
 
 WINDOW_DAYS = 7
 DATA_DIR = Path("data")
@@ -430,6 +431,72 @@ async def run_coinbase(test_version: int | None = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# NINTENDO runner
+# ---------------------------------------------------------------------------
+
+NINTENDO_LISTING_URL = "https://www.nintendo.com/au/news-and-articles/"
+
+
+async def run_nintendo(test_version: int | None = None) -> None:
+    from NINTENDO.extractor import extract
+
+    data_dir = DATA_DIR / "NINTENDO"
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n[NINTENDO] Discovering from: {NINTENDO_LISTING_URL}")
+    found = await nintendo_discover_listing()
+    print(f"[NINTENDO] Found {len(found)} links")
+
+    today = date.today().isoformat()
+    out_dir = data_dir / today
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for url in found:
+        print(f"[NINTENDO]   -> {url}")
+        try:
+            article = await extract(url, use_cache=False)
+            if not article.published_at:
+                article.published_at = date.today().isoformat()
+            try:
+                pub_date = date.fromisoformat(article.published_at[:10])
+                if pub_date < date.today() - timedelta(days=WINDOW_DAYS):
+                    print(f"[NINTENDO]     Skipped (older than {WINDOW_DAYS} days)")
+                    continue
+            except ValueError:
+                pass
+            slug = url_to_slug(url)
+            dest = out_dir / f"{slug}.json"
+            dest.write_text(article.model_dump_json(indent=2), encoding="utf-8")
+            print(f"[NINTENDO]     Saved: {dest.name}")
+        except Exception as exc:
+            print(f"[NINTENDO]     ERROR: {exc}", file=sys.stderr)
+
+    _cleanup_old_data(data_dir)
+    articles = _load_articles(data_dir)
+
+    rss, channel, atom_link = _build_rss(
+        "Nintendo AU News",
+        NINTENDO_LISTING_URL,
+        "Latest news and articles from Nintendo Australia",
+        "https://jayreck996.github.io/py-rss/nintendo.xml",
+    )
+    _add_items(channel, articles)
+    feed_path = Path("XML/NINTENDO/XML-2026Q4.xml")
+    feed_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_feed(rss, feed_path)
+    print(f"[NINTENDO] Feed updated: {len(articles)} item(s) -> {feed_path}")
+
+    if test_version is not None:
+        test_name = f"feed_v{test_version}_nintendo.xml"
+        atom_link.set("href", atom_link.get("href").rsplit("/", 1)[0] + "/" + test_name)
+        for guid in channel.findall("item/guid"):
+            guid.text += f"#v{test_version}"
+        _write_feed(rss, Path(test_name))
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -443,6 +510,7 @@ async def main(test_version: int | None = None, feed_only: bool = False) -> None
         ("ANTHROPIC", run_anthropic(test_version)),
         ("OPENAI", run_openai(test_version)),
         ("COINBASE", run_coinbase(test_version)),
+        ("NINTENDO", run_nintendo(test_version)),
     ]:
         try:
             await coro
@@ -452,7 +520,7 @@ async def main(test_version: int | None = None, feed_only: bool = False) -> None
 
     if failures:
         print(f"\nFailed sources: {', '.join(failures)}", file=sys.stderr)
-        if len(failures) == 3:
+        if len(failures) == 4:
             sys.exit(1)
 
 
