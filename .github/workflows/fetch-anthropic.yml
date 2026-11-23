@@ -2,7 +2,7 @@ name: Fetch Anthropic Articles
 
 on:
   schedule:
-    - cron: "10 17 * * *"  # 6:10 AM NZDT (UTC+13)
+    - cron: "0 17 * * *"  # 6:00 AM NZDT (UTC+13)
   workflow_dispatch:
 
 permissions:
