@@ -132,8 +132,8 @@ def _load_articles(data_dir: Path) -> list[dict]:
         try:
             article = json.loads(f.read_text(encoding="utf-8"))
             body = article.get("body_text") or ""
-            if not isinstance(body, str) or not body.strip().startswith("<"):
-                print(f"Skipped {f.name}: structured article HTML is missing")
+            if body and not body.strip().startswith("<"):
+                print(f"Skipped {f.name}: structured article HTML is invalid")
                 continue
             articles.append(article)
         except Exception:
@@ -263,7 +263,7 @@ async def run_anthropic(test_version: int | None = None) -> None:
 # OPENAI runner
 # ---------------------------------------------------------------------------
 
-def _discover_openai() -> list[tuple[str, str]]:
+def _discover_openai() -> list[tuple[str, str, str]]:
     req = urllib.request.Request(
         OPENAI_RSS_URL,
         headers={"User-Agent": "Mozilla/5.0 (compatible; RSS reader)"},
@@ -273,10 +273,11 @@ def _discover_openai() -> list[tuple[str, str]]:
     soup = BeautifulSoup(content, "xml")
     cutoff = date.today() - timedelta(days=WINDOW_DAYS)
     seen: set[str] = set()
-    items: list[tuple[str, str]] = []
+    items: list[tuple[str, str, str]] = []
     for item in soup.find_all("item"):
         link_tag = item.find("link")
         pub_tag = item.find("pubDate")
+        title_tag = item.find("title")
         if not link_tag:
             continue
         url = link_tag.text.strip().rstrip("/")
@@ -292,9 +293,10 @@ def _discover_openai() -> list[tuple[str, str]]:
                 pub_iso = dt.date().isoformat()
             except Exception:
                 pass
+        rss_title = title_tag.text.strip() if title_tag else ""
         if url not in seen:
             seen.add(url)
-            items.append((url, pub_iso))
+            items.append((url, pub_iso, rss_title))
     return items
 
 
@@ -309,8 +311,9 @@ async def run_openai(test_version: int | None = None) -> None:
     print(f"\n[OPENAI] Discovering from RSS: {OPENAI_RSS_URL}")
     found = _discover_openai()
     print(f"[OPENAI] Found {len(found)} links")
-    rss_dates = {url: pub_iso for url, pub_iso in found}
-    urls = list(dict.fromkeys(url for url, _ in found))
+    rss_dates = {url: pub_iso for url, pub_iso, _ in found}
+    rss_titles = {url: title for url, _, title in found}
+    urls = list(dict.fromkeys(url for url, _, _ in found))
 
     today = date.today().isoformat()
     out_dir = data_dir / today
@@ -326,7 +329,13 @@ async def run_openai(test_version: int | None = None) -> None:
                 or "Waiting for openai.com" in (article.body_text or "")
             )
             if blocked:
-                print(f"[OPENAI]     Skipped (Cloudflare blocked)")
+                import json as _json
+                fallback_title = rss_titles.get(url) or urlparse(url).path.split("/")[-1].replace("-", " ").title()
+                fallback_pub = rss_dates.get(url) or date.today().isoformat()
+                slug = url_to_slug(url)
+                dest = out_dir / f"{slug}.json"
+                dest.write_text(_json.dumps({"url": url, "source": "openai", "title": fallback_title, "published_at": fallback_pub, "body_text": None}, indent=2), encoding="utf-8")
+                print(f"[OPENAI]     Cloudflare blocked — saved RSS metadata only")
                 continue
             if not article.published_at and rss_dates.get(url):
                 article.published_at = rss_dates[url]
