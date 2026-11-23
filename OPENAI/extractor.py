@@ -7,7 +7,6 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
 
 from .models import Article, Image
 from .rsc import extract_rsc_article
@@ -25,7 +24,11 @@ async def extract(url: str, *, use_cache: bool = True) -> Article:
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--disable-blink-features=AutomationControlled"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+            ],
         )
         try:
             ctx = await browser.new_context(
@@ -34,13 +37,57 @@ async def extract(url: str, *, use_cache: bool = True) -> Article:
                     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
                 ),
                 viewport={"width": 1280, "height": 800},
+                locale="en-US",
+                timezone_id="America/New_York",
                 extra_http_headers={
                     "Accept-Language": "en-US,en;q=0.9",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": '"Linux"',
                 },
             )
+            await ctx.add_init_script("""
+                // navigator.webdriver
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                // Chrome runtime
+                window.chrome = {
+                    runtime: { onConnect: { addListener: () => {} }, onMessage: { addListener: () => {} } },
+                    loadTimes: function() { return {}; },
+                    csi: function() { return {}; },
+                    app: { isInstalled: false },
+                };
+                // Permissions
+                const _origPerms = window.navigator.permissions.query.bind(navigator.permissions);
+                window.navigator.permissions.query = (p) =>
+                    p.name === 'notifications'
+                        ? Promise.resolve({ state: Notification.permission })
+                        : _origPerms(p);
+                // Plugins
+                Object.defineProperty(navigator, 'plugins', { get: () => [
+                    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                    { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+                ] });
+                // Languages
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                // Vendor
+                Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
+                // Platform
+                Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
+                // Hardware concurrency
+                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
+                // iframe contentWindow
+                const _origContentWindow = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
+                Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+                    get: function() {
+                        const w = _origContentWindow.get.call(this);
+                        if (w) { try { Object.defineProperty(w.navigator, 'webdriver', { get: () => undefined }); } catch(e) {} }
+                        return w;
+                    }
+                });
+            """)
             page = await ctx.new_page()
-            await stealth_async(page)
             await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
             try:
                 await page.wait_for_selector("article p, article h1, article h2", timeout=15_000)
