@@ -7,6 +7,7 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 
 from .models import Article, Image
 from .rsc import extract_rsc_article
@@ -30,7 +31,7 @@ async def extract(url: str, *, use_cache: bool = True) -> Article:
             ctx = await browser.new_context(
                 user_agent=(
                     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
                 ),
                 viewport={"width": 1280, "height": 800},
                 extra_http_headers={
@@ -38,10 +39,8 @@ async def extract(url: str, *, use_cache: bool = True) -> Article:
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                 },
             )
-            await ctx.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
             page = await ctx.new_page()
+            await stealth_async(page)
             await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
             try:
                 await page.wait_for_selector("article p, article h1, article h2", timeout=15_000)
