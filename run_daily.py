@@ -401,14 +401,15 @@ async def run_coinbase(test_version: int | None = None) -> None:
         print(f"[COINBASE]   -> {url}")
         try:
             article = await extract(url, use_cache=False)
-            if article.published_at:
-                try:
-                    pub_date = date.fromisoformat(article.published_at[:10])
-                    if pub_date < date.today() - timedelta(days=WINDOW_DAYS):
-                        print(f"[COINBASE]     Skipped (older than {WINDOW_DAYS} days)")
-                        continue
-                except ValueError:
-                    pass
+            if not article.published_at:
+                article.published_at = date.today().isoformat()
+            try:
+                pub_date = date.fromisoformat(article.published_at[:10])
+                if pub_date < date.today() - timedelta(days=WINDOW_DAYS):
+                    print(f"[COINBASE]     Skipped (older than {WINDOW_DAYS} days)")
+                    continue
+            except ValueError:
+                pass
             slug = url_to_slug(url)
             dest = out_dir / f"{slug}.json"
             dest.write_text(article.model_dump_json(indent=2), encoding="utf-8")
