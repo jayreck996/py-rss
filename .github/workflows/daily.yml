@@ -25,7 +25,7 @@ jobs:
       - name: Initialise submodules
         run: |
           git config --global url."https://${{ secrets.XML_PAT }}@github.com/jayreck996/XML".insteadOf "https://github.com/jayreck996/XML"
-          git submodule update --init -- XML
+          git submodule update --init --checkout -- XML
           git -C XML checkout -B main origin/main
 
       - uses: actions/setup-python@v5
