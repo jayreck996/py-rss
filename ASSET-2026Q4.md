@@ -9,6 +9,15 @@ REQUIRED FORMAT FOR EACH ASSET ENTRY:
 
 ## ASSET:{NAME OF ENVIRONMENT} {YYYY-MM-DD HH:MM} → {CONTENT}
 
+## ASSET:py-rss 2026-11-24 → Coinbase date extraction fix and landing page exclusion
+
+**Bug fixes in COINBASE/extractor.py and run_daily.py.**
+`discover_listing()` was matching `/blog/landing` as an article URL (regex `^/blog/[^/]+$`). Added `_NON_ARTICLE_SLUGS` exclusion set (`landing`, `index`, etc.) to filter it out.
+
+Added two new date extraction helpers: `_time_element_date()` checks `<time datetime="...">` elements in the JS-rendered DOM; `_rsc_date()` searches the RSC payload for `publishedAt`/`publishDate`/`datePublished` fields. These run after `article:published_time` and JSON-LD checks.
+
+Removed the "default to today" fallback in `run_daily.py` for Coinbase — previously all articles defaulted to today's date, bypassing the 7-day window filter and causing months-old articles (Q1/Q2 earnings, etc.) to appear in the feed. Now only articles with an extractable `published_at` are date-filtered; articles with no date are still saved but without a `pubDate` in the feed.
+
 ## ASSET:py-rss 2026-11-24 → stealth patches applied to COINBASE and NINTENDO extractors
 
 **Cloudflare/bot-detection hardening across all four sources.**
