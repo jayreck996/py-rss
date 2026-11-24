@@ -77,6 +77,8 @@ async def extract(url: str, *, use_cache: bool = True) -> Article:
         _meta(soup, "article:published_time")
         or _jsonld_field(soup, "datePublished")
         or _jsonld_field(soup, "dateCreated")
+        or _time_element_date(soup)
+        or _rsc_date(html)
     )
     og_image = _meta(soup, "og:image") or _meta(soup, "twitter:image")
     cover_image = Image(url=og_image) if og_image else None
@@ -128,17 +130,25 @@ async def discover_listing() -> list[str]:
         finally:
             await browser.close()
 
+    _NON_ARTICLE_SLUGS = {"landing", "index", "announcement", "category", "tag"}
+
     soup = BeautifulSoup(html, "lxml")
     seen: set[str] = set()
     urls: list[str] = []
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if re.match(r"^/blog/[^/]+$", href):
+            slug = href.split("/")[-1]
+            if slug in _NON_ARTICLE_SLUGS:
+                continue
             full = f"https://www.coinbase.com{href}"
             if full not in seen:
                 seen.add(full)
                 urls.append(full)
         elif re.match(r"^https://www\.coinbase\.com/blog/[^/]+$", href):
+            slug = href.rstrip("/").split("/")[-1]
+            if slug in _NON_ARTICLE_SLUGS:
+                continue
             if href not in seen:
                 seen.add(href)
                 urls.append(href)
@@ -180,6 +190,31 @@ def _extract_rsc_body(html: str) -> Optional[str]:
         if text:
             paragraphs.append(f"<p>{text}</p>")
     return "".join(paragraphs) if paragraphs else None
+
+
+def _time_element_date(soup: BeautifulSoup) -> Optional[str]:
+    for t in soup.find_all("time"):
+        dt = t.get("datetime", "").strip()
+        if re.match(r"20\d\d-[01]\d-[0-3]\d", dt):
+            return dt[:10]
+    return None
+
+
+def _rsc_date(html: str) -> Optional[str]:
+    chunks: list[str] = []
+    for m in re.finditer(r'__next_f\.push\(\[1,"(.*?)"\]\)', html, re.DOTALL):
+        try:
+            chunks.append(json.loads(f'"{m.group(1)}"'))
+        except Exception:
+            pass
+    if not chunks:
+        return None
+    payload = "".join(chunks)
+    m = re.search(
+        r'"(?:publishedAt|publishDate|datePublished|created_at|date)"\s*:\s*"(20\d\d-[01]\d-[0-3]\d[^"]*)"',
+        payload, re.IGNORECASE,
+    )
+    return m.group(1)[:10] if m else None
 
 
 def _meta(soup: BeautifulSoup, name: str) -> Optional[str]:
