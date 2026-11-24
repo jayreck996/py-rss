@@ -19,23 +19,49 @@ async def discover_listing() -> list[str]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--disable-blink-features=AutomationControlled"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+            ],
         )
         try:
             ctx = await browser.new_context(
                 user_agent=(
                     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
                 ),
                 viewport={"width": 1280, "height": 800},
+                locale="en-AU",
+                timezone_id="Pacific/Auckland",
                 extra_http_headers={
                     "Accept-Language": "en-AU,en;q=0.9",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 },
             )
-            await ctx.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
+            await ctx.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                window.chrome = {
+                    runtime: { onConnect: { addListener: () => {} }, onMessage: { addListener: () => {} } },
+                    loadTimes: function() { return {}; },
+                    csi: function() { return {}; },
+                    app: { isInstalled: false },
+                };
+                const _origPerms = window.navigator.permissions.query.bind(navigator.permissions);
+                window.navigator.permissions.query = (p) =>
+                    p.name === 'notifications'
+                        ? Promise.resolve({ state: Notification.permission })
+                        : _origPerms(p);
+                Object.defineProperty(navigator, 'plugins', { get: () => [
+                    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                    { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+                ] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
+                Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
+                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
+            """)
             page = await ctx.new_page()
             await page.goto(LISTING_URL, wait_until="domcontentloaded", timeout=60_000)
             try:
@@ -73,23 +99,49 @@ async def extract(url: str, *, use_cache: bool = True) -> Article:
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=["--disable-blink-features=AutomationControlled"],
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+            ],
         )
         try:
             ctx = await browser.new_context(
                 user_agent=(
                     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
                 ),
                 viewport={"width": 1280, "height": 800},
+                locale="en-AU",
+                timezone_id="Pacific/Auckland",
                 extra_http_headers={
                     "Accept-Language": "en-AU,en;q=0.9",
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                 },
             )
-            await ctx.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
+            await ctx.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                window.chrome = {
+                    runtime: { onConnect: { addListener: () => {} }, onMessage: { addListener: () => {} } },
+                    loadTimes: function() { return {}; },
+                    csi: function() { return {}; },
+                    app: { isInstalled: false },
+                };
+                const _origPerms = window.navigator.permissions.query.bind(navigator.permissions);
+                window.navigator.permissions.query = (p) =>
+                    p.name === 'notifications'
+                        ? Promise.resolve({ state: Notification.permission })
+                        : _origPerms(p);
+                Object.defineProperty(navigator, 'plugins', { get: () => [
+                    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+                    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+                    { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+                ] });
+                Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+                Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.' });
+                Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
+                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
+            """)
             page = await ctx.new_page()
             await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
             try:
