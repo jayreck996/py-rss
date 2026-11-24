@@ -9,6 +9,20 @@ REQUIRED FORMAT FOR EACH ASSET ENTRY:
 
 ## ASSET:{NAME OF ENVIRONMENT} {YYYY-MM-DD HH:MM} → {CONTENT}
 
+## ASSET:py-rss 2026-11-24 → schedule consolidation + Cloudflare stealth fix
+
+**Schedule consolidation from py-openai / py-anthropic.**
+Added `fetch-openai.yml` and `fetch-anthropic.yml` as standalone scheduled workflows (`0 17 * * *`, 6:00 AM NZDT). Each runs and commits only its own XML subfolder. `daily.yml` remains at `30 17 * * *` as full aggregator + Pages deployer. Schedules in `py-openai` and `py-anthropic` disabled (`workflow_dispatch` only) — both repos marked for retirement.
+
+**NINTENDO added.** `run_daily.py` now covers four sources: ANTHROPIC, OPENAI, COINBASE, NINTENDO.
+
+**Cloudflare bypass (OPENAI extractor).**
+Articles from Nov 19–23 were blocked by Cloudflare during Playwright extraction. Fixed by inlining stealth JS patches in `OPENAI/extractor.py`: removes `navigator.webdriver`, mocks Chrome runtime, patches permissions/plugins/languages/vendor/hardwareConcurrency, adds `sec-ch-ua` headers. Chrome UA updated 125 → 131. Same patches applied to `ANTHROPIC/extractor.py` proactively.
+
+**Pages feeds:** `openai.xml` · `anthropic.xml` · `coinbase.xml` · `nintendo.xml` → `https://jayreck996.github.io/py-rss/`
+
+**Secrets required:** `XML_PAT`.
+
 ## ASSET:py-rss 2026-11-22 → initial setup; monorepo consolidating py-anthropic, py-openai, py-coinbase
 
 **Repo consolidates all three scrapers into one workflow with per-source failure isolation.**
