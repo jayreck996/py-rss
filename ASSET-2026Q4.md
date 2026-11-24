@@ -9,6 +9,13 @@ REQUIRED FORMAT FOR EACH ASSET ENTRY:
 
 ## ASSET:{NAME OF ENVIRONMENT} {YYYY-MM-DD HH:MM} → {CONTENT}
 
+## ASSET:py-rss 2026-11-24 → workflow submodule fix and full daily test pass
+
+**Fixed `git submodule update --init` being blocked by `update = none` in `.gitmodules`.**
+All three workflows (`daily.yml`, `fetch-openai.yml`, `fetch-anthropic.yml`) updated to use `--checkout` flag to override the local `update = none` setting. This restores the XML submodule population on GitHub Actions without changing local behaviour. Prior runs were failing with `fatal: in unpopulated submodule 'XML'` at the commit step.
+
+Full daily run confirmed passing: Anthropic 4, OpenAI 16, Coinbase 5 (7-day filter working with real dates), Nintendo 24. GitHub Pages deployed successfully. Two preceding failures were a transient GitHub Pages API outage, not a code issue.
+
 ## ASSET:py-rss 2026-11-24 → Coinbase date extraction fix and landing page exclusion
 
 **Bug fixes in COINBASE/extractor.py and run_daily.py.**
