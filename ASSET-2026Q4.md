@@ -9,6 +9,15 @@ REQUIRED FORMAT FOR EACH ASSET ENTRY:
 
 ## ASSET:{NAME OF ENVIRONMENT} {YYYY-MM-DD HH:MM} → {CONTENT}
 
+## ASSET:py-rss 2026-11-24 → stealth patches applied to COINBASE and NINTENDO extractors
+
+**Cloudflare/bot-detection hardening across all four sources.**
+Applied full inline stealth JS to `COINBASE/extractor.py` and `NINTENDO/extractor.py` (both `extract()` and `discover_listing()` contexts in each). Patches cover: `navigator.webdriver`, Chrome runtime mock, permissions, plugins, languages, vendor, platform, hardwareConcurrency. Chrome UA updated 125 → 131. Added `--no-sandbox`, `--disable-dev-shm-usage` to Playwright launch args.
+
+COINBASE was already patched from a prior session. NINTENDO was the remaining unpatched source — now updated with `locale="en-AU"` and `timezone_id="Pacific/Auckland"` to match the Nintendo AU site.
+
+All four extractors (ANTHROPIC, OPENAI, COINBASE, NINTENDO) are now on identical stealth configuration.
+
 ## ASSET:py-rss 2026-11-24 → schedule consolidation + Cloudflare stealth fix
 
 **Schedule consolidation from py-openai / py-anthropic.**
