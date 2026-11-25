@@ -5,8 +5,14 @@ on:
     - cron: "30 6 * * *"
       timezone: "Pacific/Auckland"
   workflow_dispatch:
+    inputs:
+      publish_existing:
+        description: Publish the latest committed XML
+        type: boolean
+        default: false
 
 permissions:
+  actions: read
   contents: write
   pages: write
   id-token: write
@@ -30,29 +36,36 @@ jobs:
           git -C XML checkout -B main origin/main
 
       - uses: actions/setup-python@v5
+        if: ${ !inputs.publish_existing }
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install Python dependencies
+        if: ${ !inputs.publish_existing }
         run: pip install -r requirements.txt
 
       - name: Cache Playwright browsers
+        if: ${ !inputs.publish_existing }
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ hashFiles('requirements.txt') }}
 
       - name: Install Playwright Chromium
+        if: ${ !inputs.publish_existing }
         run: playwright install chromium --with-deps
 
       - name: Run tests
+        if: ${ !inputs.publish_existing }
         run: python -m unittest discover -s tests -v
 
       - name: Clear cached data and fetch fresh articles
+        if: ${ !inputs.publish_existing }
         run: python run_daily.py
 
       - name: Commit new articles
+        if: ${ !inputs.publish_existing }
         run: |
           BOT_NAME="github-actions[bot]"
           BOT_EMAIL="github-actions[bot]@users.noreply.github.com"
@@ -104,9 +117,25 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+          name: github-pages-${{ github.run_attempt }}
+
+      - name: Wait for the Pages artifact to become available
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: github-pages-${{ github.run_attempt }}
+        run: |
+          for attempt in {1..12}; do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=$ARTIFACT_NAME" \
+              --jq '.total_count' | grep -qx 1; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Pages artifact did not become available"
+          exit 1
 
       - name: Deploy feed to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
         with:
-          artifact_name: github-pages
+          artifact_name: github-pages-${{ github.run_attempt }}
