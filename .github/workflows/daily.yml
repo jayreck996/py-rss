@@ -36,36 +36,36 @@ jobs:
           git -C XML checkout -B main origin/main
 
       - uses: actions/setup-python@v5
-        if: ${ !inputs.publish_existing }
+        if: inputs.publish_existing != true
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Install Python dependencies
-        if: ${ !inputs.publish_existing }
+        if: inputs.publish_existing != true
         run: pip install -r requirements.txt
 
       - name: Cache Playwright browsers
-        if: ${ !inputs.publish_existing }
+        if: inputs.publish_existing != true
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ hashFiles('requirements.txt') }}
 
       - name: Install Playwright Chromium
-        if: ${ !inputs.publish_existing }
+        if: inputs.publish_existing != true
         run: playwright install chromium --with-deps
 
       - name: Run tests
-        if: ${ !inputs.publish_existing }
+        if: inputs.publish_existing != true
         run: python -m unittest discover -s tests -v
 
       - name: Clear cached data and fetch fresh articles
-        if: ${ !inputs.publish_existing }
+        if: inputs.publish_existing != true
         run: python run_daily.py
 
       - name: Commit new articles
-        if: ${ !inputs.publish_existing }
+        if: inputs.publish_existing != true
         run: |
           BOT_NAME="github-actions[bot]"
           BOT_EMAIL="github-actions[bot]@users.noreply.github.com"
