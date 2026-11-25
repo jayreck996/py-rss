@@ -62,6 +62,9 @@ jobs:
           git config user.name "$BOT_NAME"
           git config user.email "$BOT_EMAIL"
           git add -- ANTHROPIC/XML-2026Q4.xml OPENAI/XML-2026Q4.xml COINBASE/XML-2026Q4.xml NINTENDO/XML-2026Q4.xml
+          if [ -f BINANCE/XML-2026Q4.xml ]; then
+            git add -- BINANCE/XML-2026Q4.xml
+          fi
           if ! git diff --cached --quiet; then
             git commit -m "chore: daily fetch $(date -u +%Y-%m-%d)"
             for attempt in 1 2 3 4 5; do
@@ -92,6 +95,9 @@ jobs:
           cp XML/OPENAI/XML-2026Q4.xml _site/openai.xml
           cp XML/COINBASE/XML-2026Q4.xml _site/coinbase.xml
           cp XML/NINTENDO/XML-2026Q4.xml _site/nintendo.xml
+          if [ -f XML/BINANCE/XML-2026Q4.xml ]; then
+            cp XML/BINANCE/XML-2026Q4.xml _site/binance.xml
+          fi
           touch _site/.nojekyll
 
       - name: Upload feed artifact

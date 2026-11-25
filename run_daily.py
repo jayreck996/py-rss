@@ -1,5 +1,5 @@
 """
-Aggregated daily fetch: Anthropic, OpenAI, Coinbase, Nintendo.
+Aggregated daily fetch: Anthropic, OpenAI, Coinbase, Nintendo, Binance.
 Each source runs independently — a failure in one does not stop the others.
 Writes per-source XML feeds to the XML/ submodule for Pages.
 """
@@ -506,6 +506,35 @@ async def run_nintendo(test_version: int | None = None) -> None:
         _write_feed(rss, Path(test_name))
 
 
+async def run_binance(test_version: int | None = None) -> None:
+    from binance.extractor import LISTING_URL, fetch_articles
+
+    articles = await fetch_articles()
+    cutoff = date.today() - timedelta(days=WINDOW_DAYS)
+    articles = [
+        article for article in articles
+        if date.fromisoformat(article["published_at"][:10]) >= cutoff
+    ]
+    articles.sort(key=lambda article: article["published_at"], reverse=True)
+
+    rss, channel, atom_link = _build_rss(
+        "Binance Blog", LISTING_URL, "Latest articles from Binance",
+        "https://jayreck996.github.io/py-rss/binance.xml",
+    )
+    _add_items(channel, articles)
+    feed_path = Path("XML/BINANCE/XML-2026Q4.xml")
+    feed_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_feed(rss, feed_path)
+    print(f"[BINANCE] Feed updated: {len(articles)} item(s) -> {feed_path}")
+
+    if test_version is not None:
+        test_name = f"feed_v{test_version}_binance.xml"
+        atom_link.set("href", atom_link.get("href").rsplit("/", 1)[0] + "/" + test_name)
+        for guid in channel.findall("item/guid"):
+            guid.text += f"#v{test_version}"
+        _write_feed(rss, Path(test_name))
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -516,26 +545,28 @@ async def main(test_version: int | None = None, feed_only: bool = False) -> None
 
     failures: list[str] = []
 
-    for name, coro in [
-        ("ANTHROPIC", run_anthropic(test_version)),
-        ("OPENAI", run_openai(test_version)),
-        ("COINBASE", run_coinbase(test_version)),
-        ("NINTENDO", run_nintendo(test_version)),
-    ]:
+    sources = [
+        ("ANTHROPIC", run_anthropic),
+        ("OPENAI", run_openai),
+        ("COINBASE", run_coinbase),
+        ("NINTENDO", run_nintendo),
+        ("BINANCE", run_binance),
+    ]
+    for name, run in sources:
         try:
-            await coro
+            await run(test_version)
         except Exception as exc:
             print(f"\n[{name}] FAILED: {exc}", file=sys.stderr)
             failures.append(name)
 
     if failures:
         print(f"\nFailed sources: {', '.join(failures)}", file=sys.stderr)
-        if len(failures) == 4:
+        if len(failures) == len(sources):
             sys.exit(1)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Aggregate RSS feeds from Anthropic, OpenAI, Coinbase.")
+    parser = argparse.ArgumentParser(description="Aggregate RSS feeds from Anthropic, OpenAI, Coinbase, Nintendo, Binance.")
     parser.add_argument("--feed-only", action="store_true", help="Rebuild feeds from saved data without fetching.")
     parser.add_argument("--test-version", type=int, metavar="N")
     args = parser.parse_args()
