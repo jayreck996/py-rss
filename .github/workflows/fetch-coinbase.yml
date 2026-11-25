@@ -1,0 +1,75 @@
+name: Fetch Coinbase Articles
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+      timezone: "Pacific/Auckland"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Initialise XML submodule
+        run: |
+          git config --global url."https://${{ secrets.XML_PAT }}@github.com/jayreck996/XML".insteadOf "https://github.com/jayreck996/XML"
+          git submodule update --init --checkout -- XML
+          git -C XML checkout -B main origin/main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+
+      - name: Fetch Coinbase articles
+        run: python -c "import asyncio; from run_daily import run_coinbase; asyncio.run(run_coinbase())"
+
+      - name: Commit articles
+        run: |
+          BOT_NAME="github-actions[bot]"
+          BOT_EMAIL="github-actions[bot]@users.noreply.github.com"
+          git config user.name "$BOT_NAME"
+          git config user.email "$BOT_EMAIL"
+          cd XML
+          git config user.name "$BOT_NAME"
+          git config user.email "$BOT_EMAIL"
+          git add -- COINBASE/XML-2026Q4.xml
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: coinbase fetch $(date -u +%Y-%m-%d)"
+            for attempt in 1 2 3 4 5; do
+              if git push; then break; fi
+              if [ "$attempt" -eq 5 ]; then exit 1; fi
+              echo "XML push rejected (attempt $attempt) -- rebasing..."
+              git fetch origin main && git rebase origin/main
+            done
+          fi
+          cd ..
+          git add XML
+          git diff --staged --quiet && echo "Nothing new to commit." || \
+            (git commit -m "chore: coinbase fetch $(date -u +%Y-%m-%d)" && \
+            for attempt in 1 2 3 4 5; do
+              if git pull --rebase origin main && git push origin main; then break; fi
+              if [ "$attempt" -eq 5 ]; then exit 1; fi
+              echo "parent push rejected (attempt $attempt) -- rebasing..."
+              git fetch origin main && git rebase origin/main
+            done)
