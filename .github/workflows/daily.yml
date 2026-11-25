@@ -2,7 +2,7 @@ name: Daily Aggregated Fetch
 
 on:
   schedule:
-    - cron: "30 17 * * *"  # 6:30 AM NZDT (UTC+13), after individual repos finish
+    - cron: "0 6 * * *"  # 06:00 UTC daily
   workflow_dispatch:
 
 permissions:
