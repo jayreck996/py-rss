@@ -2,7 +2,7 @@ name: Daily Aggregated Fetch
 
 on:
   schedule:
-    - cron: "0 6 * * *"
+    - cron: "30 6 * * *"
       timezone: "Pacific/Auckland"
   workflow_dispatch:
 
