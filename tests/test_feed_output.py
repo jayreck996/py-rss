@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -72,6 +73,13 @@ class FeedOutputTests(unittest.TestCase):
         )
         articles = run_daily._load_articles(self.root / "data" / "ANTHROPIC")
         self.assertEqual(articles, [])
+
+    def test_feed_path_comes_from_remote_configuration_environment(self):
+        with patch.dict(os.environ, {"OPENAI_FEED_PATH": "XML/OPENAI/custom.xml"}):
+            self.assertEqual(
+                run_daily.configured_feed_path("OPENAI"),
+                Path("XML/OPENAI/custom.xml"),
+            )
 
 
 if __name__ == "__main__":

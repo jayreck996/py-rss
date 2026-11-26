@@ -17,11 +17,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Initialise XML submodule
-        run: |
-          git config --global url."https://${{ secrets.XML_PAT }}@github.com/jayreck996/XML".insteadOf "https://github.com/jayreck996/XML"
-          git submodule update --init --checkout -- XML
-          git -C XML checkout -B main origin/main
+      - name: Check out feed configuration and XML
+        uses: ./.github/actions/checkout-feeds
+        with:
+          token: ${{ secrets.XML_PAT }}
 
       - uses: actions/setup-python@v5
         with:
@@ -45,30 +44,6 @@ jobs:
 
       - name: Commit articles
         run: |
-          BOT_NAME="github-actions[bot]"
-          BOT_EMAIL="github-actions[bot]@users.noreply.github.com"
-          git config user.name "$BOT_NAME"
-          git config user.email "$BOT_EMAIL"
-          cd XML
-          git config user.name "$BOT_NAME"
-          git config user.email "$BOT_EMAIL"
-          git add -- COINBASE/XML-2026Q4.xml
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: coinbase fetch $(date -u +%Y-%m-%d)"
-            for attempt in 1 2 3 4 5; do
-              if git push; then break; fi
-              if [ "$attempt" -eq 5 ]; then exit 1; fi
-              echo "XML push rejected (attempt $attempt) -- rebasing..."
-              git fetch origin main && git rebase origin/main
-            done
-          fi
-          cd ..
-          git add XML
-          git diff --staged --quiet && echo "Nothing new to commit." || \
-            (git commit -m "chore: coinbase fetch $(date -u +%Y-%m-%d)" && \
-            for attempt in 1 2 3 4 5; do
-              if git pull --rebase origin main && git push origin main; then break; fi
-              if [ "$attempt" -eq 5 ]; then exit 1; fi
-              echo "parent push rejected (attempt $attempt) -- rebasing..."
-              git fetch origin main && git rebase origin/main
-            done)
+          bash .github/scripts/publish_xml.sh \
+            "chore: coinbase fetch $(date -u +%Y-%m-%d)" \
+            "$COINBASE_FEED_PATH"

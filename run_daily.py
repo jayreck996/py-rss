@@ -7,6 +7,7 @@ Writes per-source XML feeds to the XML/ submodule for Pages.
 import argparse
 import asyncio
 import json
+import os
 import re
 import shutil
 import sys
@@ -29,6 +30,14 @@ WINDOW_DAYS = 7
 DATA_DIR = Path("data")
 
 OPENAI_RSS_URL = "https://openai.com/news/rss.xml"
+
+
+def configured_feed_path(source: str) -> Path:
+    variable = f"{source.upper()}_FEED_PATH"
+    value = os.environ.get(variable, "")
+    if not value:
+        raise RuntimeError(f"{variable} is required; load YML/PY-RSS/YML.yml first")
+    return Path(value)
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +255,7 @@ async def run_anthropic(test_version: int | None = None) -> None:
         "https://jayreck996.github.io/py-rss/anthropic.xml",
     )
     _add_items(channel, articles)
-    feed_path = Path("XML/ANTHROPIC/XML-2026Q4.xml")
+    feed_path = configured_feed_path("ANTHROPIC")
     feed_path.parent.mkdir(parents=True, exist_ok=True)
     _write_feed(rss, feed_path)
     print(f"[ANTHROPIC] Feed updated: {len(articles)} item(s) -> {feed_path}")
@@ -364,7 +373,7 @@ async def run_openai(test_version: int | None = None) -> None:
         "https://jayreck996.github.io/py-rss/openai.xml",
     )
     _add_items(channel, articles)
-    feed_path = Path("XML/OPENAI/XML-2026Q4.xml")
+    feed_path = configured_feed_path("OPENAI")
     feed_path.parent.mkdir(parents=True, exist_ok=True)
     _write_feed(rss, feed_path)
     print(f"[OPENAI] Feed updated: {len(articles)} item(s) -> {feed_path}")
@@ -427,7 +436,7 @@ async def run_coinbase(test_version: int | None = None) -> None:
         "https://jayreck996.github.io/py-rss/coinbase.xml",
     )
     _add_items(channel, articles)
-    feed_path = Path("XML/COINBASE/XML-2026Q4.xml")
+    feed_path = configured_feed_path("COINBASE")
     feed_path.parent.mkdir(parents=True, exist_ok=True)
     _write_feed(rss, feed_path)
     print(f"[COINBASE] Feed updated: {len(articles)} item(s) -> {feed_path}")
@@ -493,7 +502,7 @@ async def run_nintendo(test_version: int | None = None) -> None:
         "https://jayreck996.github.io/py-rss/nintendo.xml",
     )
     _add_items(channel, articles)
-    feed_path = Path("XML/NINTENDO/XML-2026Q4.xml")
+    feed_path = configured_feed_path("NINTENDO")
     feed_path.parent.mkdir(parents=True, exist_ok=True)
     _write_feed(rss, feed_path)
     print(f"[NINTENDO] Feed updated: {len(articles)} item(s) -> {feed_path}")
@@ -522,7 +531,7 @@ async def run_binance(test_version: int | None = None) -> None:
         "https://jayreck996.github.io/py-rss/binance.xml",
     )
     _add_items(channel, articles)
-    feed_path = Path("XML/BINANCE/XML-2026Q4.xml")
+    feed_path = configured_feed_path("BINANCE")
     feed_path.parent.mkdir(parents=True, exist_ok=True)
     _write_feed(rss, feed_path)
     print(f"[BINANCE] Feed updated: {len(articles)} item(s) -> {feed_path}")

@@ -1,0 +1,32 @@
+name: Check out configured feed repositories
+description: Load remote py-rss paths and check out the XML repository
+
+inputs:
+  token:
+    description: Token with read access to YML and write access to XML
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check out YML configuration
+      uses: actions/checkout@v4
+      with:
+        repository: jayreck996/YML
+        ref: main
+        path: YML
+        token: ${{ inputs.token }}
+
+    - name: Load feed paths
+      id: config
+      shell: bash
+      run: python3 .github/scripts/rss_config.py
+
+    - name: Check out XML repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ steps.config.outputs.xml_repository }}
+        ref: main
+        path: ${{ steps.config.outputs.xml_checkout_path }}
+        fetch-depth: 0
+        token: ${{ inputs.token }}
