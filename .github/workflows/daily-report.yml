@@ -1,0 +1,25 @@
+name: Daily Report
+
+on:
+  schedule:
+    - cron: "0 2 * * *"  # 02:00 UTC daily, after all fetch workflows complete
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create daily report issue
+        run: python3 .github/scripts/daily_report.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
