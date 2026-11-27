@@ -29,8 +29,7 @@ def validate_relative_path(value: str, prefix: str, label: str) -> str:
 
 
 def load_configs() -> tuple[dict, dict]:
-    feed_env = os.environ.get("FEED", "").strip().upper()
-    paths = [CONFIG_DIR / feed_env / "YML.yml"] if feed_env else sorted(CONFIG_DIR.glob("*/YML.yml"))
+    paths = sorted(CONFIG_DIR.glob("*/YML.yml"))
 
     if not paths:
         raise ValueError(f"No config files found in {CONFIG_DIR}/")

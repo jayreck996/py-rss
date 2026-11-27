@@ -21,7 +21,6 @@ jobs:
         uses: ./.github/actions/checkout-feeds
         with:
           token: ${{ secrets.XML_PAT }}
-          feed: BINANCE
 
       - uses: actions/setup-python@v5
         with:
