@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a daily GitHub issue summarising today's commits using Groq free inference."""
+"""Create a daily GitHub issue summarising today's commits using GitHub Models (gpt-4o-mini)."""
 
 import json
 import os
@@ -10,10 +10,9 @@ from datetime import date
 
 REPO = os.environ["GITHUB_REPOSITORY"]
 TOKEN = os.environ["GITHUB_TOKEN"]
-GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 TODAY = date.today().isoformat()
 
-GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+GITHUB_MODELS_ENDPOINT = "https://models.inference.ai.azure.com/chat/completions"
 
 
 def fetch_commits() -> str:
@@ -26,7 +25,7 @@ def fetch_commits() -> str:
 
 def summarise(commits: str) -> str:
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": "gpt-4o-mini",
         "messages": [
             {
                 "role": "system",
@@ -44,16 +43,20 @@ def summarise(commits: str) -> str:
         "max_tokens": 400,
         "temperature": 0.3,
     }
-    req = urllib.request.Request(
-        GROQ_ENDPOINT,
-        data=json.dumps(payload).encode(),
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json",
-        },
+    # Use curl to bypass Python 3.14's DNS resolver which fails on this endpoint
+    result = subprocess.run(
+        [
+            "curl", "-sS", "--max-time", "30",
+            "-X", "POST", GITHUB_MODELS_ENDPOINT,
+            "-H", f"Authorization: Bearer {TOKEN}",
+            "-H", "Content-Type: application/json",
+            "-d", json.dumps(payload),
+        ],
+        capture_output=True, text=True, check=True,
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.load(resp)
+    data = json.loads(result.stdout)
+    if "error" in data:
+        raise RuntimeError(f"GitHub Models error: {data['error']}")
     return data["choices"][0]["message"]["content"].strip()
 
 
