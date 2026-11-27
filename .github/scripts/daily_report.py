@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a daily GitHub issue summarising today's commits using Hugging Face free inference."""
+"""Create a daily GitHub issue summarising today's commits using Groq free inference."""
 
 import json
 import os
@@ -10,13 +10,10 @@ from datetime import date
 
 REPO = os.environ["GITHUB_REPOSITORY"]
 TOKEN = os.environ["GITHUB_TOKEN"]
-HF_TOKEN = os.environ["HF_TOKEN"]
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 TODAY = date.today().isoformat()
 
-HF_ENDPOINT = (
-    "https://api-inference.huggingface.co/models/"
-    "meta-llama/Meta-Llama-3.1-8B-Instruct/v1/chat/completions"
-)
+GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
 
 def fetch_commits() -> str:
@@ -29,7 +26,7 @@ def fetch_commits() -> str:
 
 def summarise(commits: str) -> str:
     payload = {
-        "model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+        "model": "llama-3.1-8b-instant",
         "messages": [
             {
                 "role": "system",
@@ -48,14 +45,14 @@ def summarise(commits: str) -> str:
         "temperature": 0.3,
     }
     req = urllib.request.Request(
-        HF_ENDPOINT,
+        GROQ_ENDPOINT,
         data=json.dumps(payload).encode(),
         headers={
-            "Authorization": f"Bearer {HF_TOKEN}",
+            "Authorization": f"Bearer {GROQ_API_KEY}",
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.load(resp)
     return data["choices"][0]["message"]["content"].strip()
 
