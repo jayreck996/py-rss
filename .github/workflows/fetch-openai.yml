@@ -2,7 +2,7 @@ name: Fetch OpenAI Articles
 
 on:
   schedule:
-    - cron: "0 17 * * *"  # 17:00 UTC daily
+    - cron: "0 9 * * *"  # 09:00 UTC (targets ~06:00 NZDT after GitHub delay)
   workflow_dispatch:
 
 permissions:
