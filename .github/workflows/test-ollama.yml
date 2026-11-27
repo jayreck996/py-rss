@@ -1,0 +1,46 @@
+name: Test Ollama 1b
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama and pull llama3.2:1b
+        run: |
+          ollama serve &
+          sleep 5
+          ollama pull llama3.2:1b
+
+      - name: Test commit summary
+        run: |
+          COMMITS=$(git log --pretty=format:"%h %s" --after="2026-11-27T00:00:00Z")
+          echo "Commits found:"
+          echo "$COMMITS"
+          echo "---"
+          curl -s http://localhost:11434/api/chat -d "{
+            \"model\": \"llama3.2:1b\",
+            \"stream\": false,
+            \"messages\": [
+              {
+                \"role\": \"system\",
+                \"content\": \"You are a concise technical reporter. Given git commit messages, write a 2-3 sentence plain-English summary of what changed today and why. Be specific, not generic.\"
+              },
+              {
+                \"role\": \"user\",
+                \"content\": \"Repository: jayreck996/py-rss\nDate: 2026-11-27\n\nCommits:\n$COMMITS\"
+              }
+            ]
+          }" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['message']['content'])"
