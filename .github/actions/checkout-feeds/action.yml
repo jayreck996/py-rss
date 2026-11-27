@@ -5,6 +5,10 @@ inputs:
   token:
     description: Token with read access to YML and write access to XML
     required: true
+  feed:
+    description: Feed name to load (e.g. ANTHROPIC). Loads all feeds if omitted.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -20,6 +24,8 @@ runs:
     - name: Load feed paths
       id: config
       shell: bash
+      env:
+        FEED: ${{ inputs.feed }}
       run: python3 .github/scripts/rss_config.py
 
     - name: Check out XML repository

@@ -15,7 +15,7 @@ except ImportError:
     import yaml
 
 
-CONFIG_PATH = Path("YML/PY-RSS/YML.yml")
+CONFIG_DIR = Path("YML/PY-RSS")
 SOURCE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -28,11 +28,34 @@ def validate_relative_path(value: str, prefix: str, label: str) -> str:
     return value
 
 
-def load_outputs() -> dict[str, str]:
-    with CONFIG_PATH.open(encoding="utf-8") as handle:
-        config = yaml.safe_load(handle).get("config", {})
+def load_configs() -> tuple[dict, dict]:
+    feed_env = os.environ.get("FEED", "").strip().upper()
+    paths = [CONFIG_DIR / feed_env / "YML.yml"] if feed_env else sorted(CONFIG_DIR.glob("*/YML.yml"))
 
-    xml = config.get("repositories", {}).get("xml", {})
+    if not paths:
+        raise ValueError(f"No config files found in {CONFIG_DIR}/")
+
+    xml_config = None
+    merged_feeds: dict = {}
+
+    for config_path in paths:
+        with config_path.open(encoding="utf-8") as handle:
+            config = yaml.safe_load(handle).get("config", {})
+
+        xml = config.get("repositories", {}).get("xml", {})
+        if xml_config is None:
+            xml_config = xml
+        elif xml != xml_config:
+            raise ValueError(f"Inconsistent xml repository config in {config_path}")
+
+        merged_feeds.update(config.get("feeds", {}))
+
+    return xml_config, merged_feeds
+
+
+def load_outputs() -> dict[str, str]:
+    xml, feeds = load_configs()
+
     repository = xml.get("name", "")
     checkout_path = xml.get("checkout_path", "")
     checkout = PurePosixPath(checkout_path)
@@ -46,7 +69,6 @@ def load_outputs() -> dict[str, str]:
         "xml_checkout_path": checkout_path,
     }
     feed_paths = []
-    feeds = config.get("feeds", {})
     if not feeds:
         raise ValueError("config.feeds must contain at least one feed")
     for source, feed in feeds.items():
