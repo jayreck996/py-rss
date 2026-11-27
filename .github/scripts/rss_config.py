@@ -28,7 +28,13 @@ def validate_relative_path(value: str, prefix: str, label: str) -> str:
     return value
 
 
-def load_configs() -> tuple[dict, dict]:
+VALID_STEP1_HANDLERS = {
+    "anthropic_api", "openai_rss", "coinbase_playwright", "nintendo_playwright", "binance_api",
+}
+VALID_STEP2_HANDLERS = {"generate_rss"}
+
+
+def load_configs() -> tuple[dict, dict, dict]:
     paths = sorted(CONFIG_DIR.glob("*/YML.yml"))
 
     if not paths:
@@ -36,11 +42,13 @@ def load_configs() -> tuple[dict, dict]:
 
     xml_config = None
     merged_feeds: dict = {}
+    feed_steps: dict = {}
 
     for config_path in paths:
         with config_path.open(encoding="utf-8") as handle:
-            config = yaml.safe_load(handle).get("config", {})
+            doc = yaml.safe_load(handle)
 
+        config = doc.get("config", {})
         xml = config.get("repositories", {}).get("xml", {})
         if xml_config is None:
             xml_config = xml
@@ -49,11 +57,16 @@ def load_configs() -> tuple[dict, dict]:
 
         merged_feeds.update(config.get("feeds", {}))
 
-    return xml_config, merged_feeds
+        steps = doc.get("steps", [])
+        source = next(iter(config.get("feeds", {})), None)
+        if source and steps:
+            feed_steps[source] = steps
+
+    return xml_config, merged_feeds, feed_steps
 
 
 def load_outputs() -> dict[str, str]:
-    xml, feeds = load_configs()
+    xml, feeds, feed_steps = load_configs()
 
     repository = xml.get("name", "")
     checkout_path = xml.get("checkout_path", "")
@@ -68,6 +81,7 @@ def load_outputs() -> dict[str, str]:
         "xml_checkout_path": checkout_path,
     }
     feed_paths = []
+    feed_sources = []
     if not feeds:
         raise ValueError("config.feeds must contain at least one feed")
     for source, feed in feeds.items():
@@ -97,8 +111,28 @@ def load_outputs() -> dict[str, str]:
             raise ValueError(f"{source}.window_days must be a positive integer")
         outputs[f"{source}_window_days"] = str(window_days)
 
+        steps = feed_steps.get(source, [])
+        step1_handler = ""
+        step2_handler = ""
+        for step in steps:
+            sid = step.get("id", "")
+            handler = step.get("handler", "")
+            if sid == "step-1":
+                if handler not in VALID_STEP1_HANDLERS:
+                    raise ValueError(f"{source} step-1 handler '{handler}' is not recognised")
+                step1_handler = handler
+            elif sid == "step-2":
+                if handler not in VALID_STEP2_HANDLERS:
+                    raise ValueError(f"{source} step-2 handler '{handler}' is not recognised")
+                step2_handler = handler
+        outputs[f"{source}_step1_handler"] = step1_handler
+        outputs[f"{source}_step2_handler"] = step2_handler
+
         feed_paths.append(output)
+        feed_sources.append(source)
+
     outputs["feed_paths"] = " ".join(feed_paths)
+    outputs["feed_sources"] = " ".join(feed_sources)
     return outputs
 
 

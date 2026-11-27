@@ -129,10 +129,10 @@ def _add_items(channel: Element, articles: list[dict]) -> None:
             enc.set("length", "0")
 
 
-def _cleanup_old_data(data_dir: Path) -> None:
+def _cleanup_old_data(data_dir: Path, window_days: int) -> None:
     if not data_dir.exists():
         return
-    cutoff = date.today() - timedelta(days=WINDOW_DAYS)
+    cutoff = date.today() - timedelta(days=window_days)
     for day_dir in sorted(data_dir.iterdir()):
         if not day_dir.is_dir():
             continue
@@ -169,11 +169,11 @@ def _anthropic_read_listing(listing_url: str) -> tuple[list, int]:
         return listing_resources(response.read().decode("utf-8"))
 
 
-def _anthropic_read_page(page_number: int) -> tuple[list, int]:
+def _anthropic_read_page(page_number: int, listing_url: str) -> tuple[list, int]:
     query = urlencode({"page": page_number, "language": "en", "type": "articles"})
     req = urllib.request.Request(
         CATEGORY_API + "?" + query,
-        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json", "Referer": ANTHROPIC_URL},
+        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json", "Referer": listing_url},
     )
     with urllib.request.urlopen(req, timeout=30) as response:
         data = json.load(response)
@@ -214,69 +214,12 @@ async def _discover_anthropic(listing_url: str, window_days: int) -> list[str]:
         if reached_cutoff or page_number >= total:
             break
         page_number += 1
-        items, total = _anthropic_read_page(page_number)
+        items, total = _anthropic_read_page(page_number, listing_url)
     return urls
 
 
-async def run_anthropic(test_version: int | None = None) -> None:
-    from ANTHROPIC.extractor import extract
-
-    meta = configured_feed_meta("ANTHROPIC")
-    data_dir = DATA_DIR / "ANTHROPIC"
-    if data_dir.exists():
-        shutil.rmtree(data_dir)
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"\n[ANTHROPIC] Discovering: {meta['listing_url']}")
-    urls = await _discover_anthropic(meta["listing_url"], meta["window_days"])
-    print(f"[ANTHROPIC] Found {len(urls)} links")
-
-    today = date.today().isoformat()
-    out_dir = data_dir / today
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    for url in urls:
-        print(f"[ANTHROPIC]   -> {url}")
-        try:
-            article = await extract(url, use_cache=False)
-            if not article.published_at:
-                article.published_at = date.today().isoformat()
-            try:
-                pub_date = date.fromisoformat(article.published_at[:10])
-                if pub_date < date.today() - timedelta(days=meta["window_days"]):
-                    print(f"[ANTHROPIC]     Skipped (older than {meta['window_days']} days)")
-                    continue
-            except ValueError:
-                pass
-            slug = url_to_slug(url)
-            dest = out_dir / f"{slug}.json"
-            dest.write_text(article.model_dump_json(indent=2), encoding="utf-8")
-            print(f"[ANTHROPIC]     Saved: {dest.name}")
-        except Exception as exc:
-            print(f"[ANTHROPIC]     ERROR: {exc}", file=sys.stderr)
-
-    _cleanup_old_data(data_dir)
-    articles = _load_articles(data_dir)
-
-    rss, channel, atom_link = _build_rss(
-        meta["title"], meta["link"], meta["description"], meta["self_href"],
-    )
-    _add_items(channel, articles)
-    feed_path = configured_feed_path("ANTHROPIC")
-    feed_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_feed(rss, feed_path)
-    print(f"[ANTHROPIC] Feed updated: {len(articles)} item(s) -> {feed_path}")
-
-    if test_version is not None:
-        test_name = f"feed_v{test_version}_anthropic.xml"
-        atom_link.set("href", atom_link.get("href").rsplit("/", 1)[0] + "/" + test_name)
-        for guid in channel.findall("item/guid"):
-            guid.text += f"#v{test_version}"
-        _write_feed(rss, Path(test_name))
-
-
 # ---------------------------------------------------------------------------
-# OPENAI runner
+# OPENAI discovery helper (stays here, used by step-1 openai_rss)
 # ---------------------------------------------------------------------------
 
 def _discover_openai(listing_url: str, window_days: int) -> list[tuple[str, str, str]]:
@@ -316,18 +259,58 @@ def _discover_openai(listing_url: str, window_days: int) -> list[tuple[str, str,
     return items
 
 
-async def run_openai(test_version: int | None = None) -> None:
-    from OPENAI.extractor import extract
+# ---------------------------------------------------------------------------
+# Step-1 handlers (read / discover / fetch)
+# ---------------------------------------------------------------------------
 
-    meta = configured_feed_meta("OPENAI")
-    data_dir = DATA_DIR / "OPENAI"
+async def _step1_anthropic_api(source: str, meta: dict, data_dir: Path, test_version: int | None) -> None:
+    from ANTHROPIC.extractor import extract
+
     if data_dir.exists():
         shutil.rmtree(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n[OPENAI] Discovering from RSS: {meta['listing_url']}")
+    print(f"\n[{source}] Discovering: {meta['listing_url']}")
+    urls = await _discover_anthropic(meta["listing_url"], meta["window_days"])
+    print(f"[{source}] Found {len(urls)} links")
+
+    today = date.today().isoformat()
+    out_dir = data_dir / today
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for url in urls:
+        print(f"[{source}]   -> {url}")
+        try:
+            article = await extract(url, use_cache=False)
+            if not article.published_at:
+                article.published_at = date.today().isoformat()
+            try:
+                pub_date = date.fromisoformat(article.published_at[:10])
+                if pub_date < date.today() - timedelta(days=meta["window_days"]):
+                    print(f"[{source}]     Skipped (older than {meta['window_days']} days)")
+                    continue
+            except ValueError:
+                pass
+            slug = url_to_slug(url)
+            dest = out_dir / f"{slug}.json"
+            dest.write_text(article.model_dump_json(indent=2), encoding="utf-8")
+            print(f"[{source}]     Saved: {dest.name}")
+        except Exception as exc:
+            print(f"[{source}]     ERROR: {exc}", file=sys.stderr)
+
+    _cleanup_old_data(data_dir, meta["window_days"])
+
+
+async def _step1_openai_rss(source: str, meta: dict, data_dir: Path, test_version: int | None) -> None:
+    from OPENAI.extractor import extract
+
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n[{source}] Discovering from RSS: {meta['listing_url']}")
     found = _discover_openai(meta["listing_url"], meta["window_days"])
-    print(f"[OPENAI] Found {len(found)} links")
+    print(f"[{source}] Found {len(found)} links")
     rss_dates = {url: pub_iso for url, pub_iso, _ in found}
     rss_titles = {url: title for url, _, title in found}
     urls = list(dict.fromkeys(url for url, _, _ in found))
@@ -337,7 +320,7 @@ async def run_openai(test_version: int | None = None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for url in urls:
-        print(f"[OPENAI]   -> {url}")
+        print(f"[{source}]   -> {url}")
         try:
             article = await extract(url, use_cache=False)
             blocked = (
@@ -346,13 +329,12 @@ async def run_openai(test_version: int | None = None) -> None:
                 or "Waiting for openai.com" in (article.body_text or "")
             )
             if blocked:
-                import json as _json
                 fallback_title = rss_titles.get(url) or urlparse(url).path.split("/")[-1].replace("-", " ").title()
                 fallback_pub = rss_dates.get(url) or date.today().isoformat()
                 slug = url_to_slug(url)
                 dest = out_dir / f"{slug}.json"
-                dest.write_text(_json.dumps({"url": url, "source": "openai", "title": fallback_title, "published_at": fallback_pub, "body_text": None}, indent=2), encoding="utf-8")
-                print(f"[OPENAI]     Cloudflare blocked — saved RSS metadata only")
+                dest.write_text(json.dumps({"url": url, "source": "openai", "title": fallback_title, "published_at": fallback_pub, "body_text": None}, indent=2), encoding="utf-8")
+                print(f"[{source}]     Cloudflare blocked — saved RSS metadata only")
                 continue
             if not article.published_at and rss_dates.get(url):
                 article.published_at = rss_dates[url]
@@ -360,60 +342,37 @@ async def run_openai(test_version: int | None = None) -> None:
                 try:
                     pub_date = date.fromisoformat(article.published_at[:10])
                     if pub_date < date.today() - timedelta(days=meta["window_days"]):
-                        print(f"[OPENAI]     Skipped (older than {meta['window_days']} days)")
+                        print(f"[{source}]     Skipped (older than {meta['window_days']} days)")
                         continue
                 except ValueError:
                     pass
             slug = url_to_slug(url)
             dest = out_dir / f"{slug}.json"
             dest.write_text(article.model_dump_json(indent=2), encoding="utf-8")
-            print(f"[OPENAI]     Saved: {dest.name}")
+            print(f"[{source}]     Saved: {dest.name}")
         except Exception as exc:
-            print(f"[OPENAI]     ERROR: {exc}", file=sys.stderr)
+            print(f"[{source}]     ERROR: {exc}", file=sys.stderr)
 
-    _cleanup_old_data(data_dir)
-    articles = _load_articles(data_dir)
-
-    rss, channel, atom_link = _build_rss(
-        meta["title"], meta["link"], meta["description"], meta["self_href"],
-    )
-    _add_items(channel, articles)
-    feed_path = configured_feed_path("OPENAI")
-    feed_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_feed(rss, feed_path)
-    print(f"[OPENAI] Feed updated: {len(articles)} item(s) -> {feed_path}")
-
-    if test_version is not None:
-        test_name = f"feed_v{test_version}_openai.xml"
-        atom_link.set("href", atom_link.get("href").rsplit("/", 1)[0] + "/" + test_name)
-        for guid in channel.findall("item/guid"):
-            guid.text += f"#v{test_version}"
-        _write_feed(rss, Path(test_name))
+    _cleanup_old_data(data_dir, meta["window_days"])
 
 
-# ---------------------------------------------------------------------------
-# COINBASE runner
-# ---------------------------------------------------------------------------
-
-async def run_coinbase(test_version: int | None = None) -> None:
+async def _step1_coinbase_playwright(source: str, meta: dict, data_dir: Path, test_version: int | None) -> None:
     from COINBASE.extractor import extract
 
-    meta = configured_feed_meta("COINBASE")
-    data_dir = DATA_DIR / "COINBASE"
     if data_dir.exists():
         shutil.rmtree(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n[COINBASE] Discovering from: {meta['listing_url']}")
+    print(f"\n[{source}] Discovering from: {meta['listing_url']}")
     found = await coinbase_discover_listing()
-    print(f"[COINBASE] Found {len(found)} links")
+    print(f"[{source}] Found {len(found)} links")
 
     today = date.today().isoformat()
     out_dir = data_dir / today
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for url in found:
-        print(f"[COINBASE]   -> {url}")
+        print(f"[{source}]   -> {url}")
         try:
             article = await extract(url, use_cache=False)
             if not article.published_at:
@@ -421,60 +380,37 @@ async def run_coinbase(test_version: int | None = None) -> None:
             try:
                 pub_date = date.fromisoformat(article.published_at[:10])
                 if pub_date < date.today() - timedelta(days=meta["window_days"]):
-                    print(f"[COINBASE]     Skipped (older than {meta['window_days']} days)")
+                    print(f"[{source}]     Skipped (older than {meta['window_days']} days)")
                     continue
             except ValueError:
                 pass
             slug = url_to_slug(url)
             dest = out_dir / f"{slug}.json"
             dest.write_text(article.model_dump_json(indent=2), encoding="utf-8")
-            print(f"[COINBASE]     Saved: {dest.name}")
+            print(f"[{source}]     Saved: {dest.name}")
         except Exception as exc:
-            print(f"[COINBASE]     ERROR: {exc}", file=sys.stderr)
+            print(f"[{source}]     ERROR: {exc}", file=sys.stderr)
 
-    _cleanup_old_data(data_dir)
-    articles = _load_articles(data_dir)
-
-    rss, channel, atom_link = _build_rss(
-        meta["title"], meta["link"], meta["description"], meta["self_href"],
-    )
-    _add_items(channel, articles)
-    feed_path = configured_feed_path("COINBASE")
-    feed_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_feed(rss, feed_path)
-    print(f"[COINBASE] Feed updated: {len(articles)} item(s) -> {feed_path}")
-
-    if test_version is not None:
-        test_name = f"feed_v{test_version}_coinbase.xml"
-        atom_link.set("href", atom_link.get("href").rsplit("/", 1)[0] + "/" + test_name)
-        for guid in channel.findall("item/guid"):
-            guid.text += f"#v{test_version}"
-        _write_feed(rss, Path(test_name))
+    _cleanup_old_data(data_dir, meta["window_days"])
 
 
-# ---------------------------------------------------------------------------
-# NINTENDO runner
-# ---------------------------------------------------------------------------
-
-async def run_nintendo(test_version: int | None = None) -> None:
+async def _step1_nintendo_playwright(source: str, meta: dict, data_dir: Path, test_version: int | None) -> None:
     from NINTENDO.extractor import extract
 
-    meta = configured_feed_meta("NINTENDO")
-    data_dir = DATA_DIR / "NINTENDO"
     if data_dir.exists():
         shutil.rmtree(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n[NINTENDO] Discovering from: {meta['listing_url']}")
+    print(f"\n[{source}] Discovering from: {meta['listing_url']}")
     found = await nintendo_discover_listing()
-    print(f"[NINTENDO] Found {len(found)} links")
+    print(f"[{source}] Found {len(found)} links")
 
     today = date.today().isoformat()
     out_dir = data_dir / today
     out_dir.mkdir(parents=True, exist_ok=True)
 
     for url in found:
-        print(f"[NINTENDO]   -> {url}")
+        print(f"[{source}]   -> {url}")
         try:
             article = await extract(url, use_cache=False)
             if not article.published_at:
@@ -482,64 +418,104 @@ async def run_nintendo(test_version: int | None = None) -> None:
             try:
                 pub_date = date.fromisoformat(article.published_at[:10])
                 if pub_date < date.today() - timedelta(days=meta["window_days"]):
-                    print(f"[NINTENDO]     Skipped (older than {meta['window_days']} days)")
+                    print(f"[{source}]     Skipped (older than {meta['window_days']} days)")
                     continue
             except ValueError:
                 pass
             slug = url_to_slug(url)
             dest = out_dir / f"{slug}.json"
             dest.write_text(article.model_dump_json(indent=2), encoding="utf-8")
-            print(f"[NINTENDO]     Saved: {dest.name}")
+            print(f"[{source}]     Saved: {dest.name}")
         except Exception as exc:
-            print(f"[NINTENDO]     ERROR: {exc}", file=sys.stderr)
+            print(f"[{source}]     ERROR: {exc}", file=sys.stderr)
 
-    _cleanup_old_data(data_dir)
+    _cleanup_old_data(data_dir, meta["window_days"])
+
+
+async def _step1_binance_api(source: str, meta: dict, data_dir: Path, test_version: int | None) -> None:
+    from binance.extractor import fetch_articles
+
+    if data_dir.exists():
+        shutil.rmtree(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n[{source}] Fetching articles from API")
+    articles = await fetch_articles()
+    cutoff = date.today() - timedelta(days=meta["window_days"])
+    articles = [a for a in articles if date.fromisoformat(a["published_at"][:10]) >= cutoff]
+    articles.sort(key=lambda a: a["published_at"], reverse=True)
+
+    today = date.today().isoformat()
+    out_dir = data_dir / today
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for article in articles:
+        slug = url_to_slug(article["url"])
+        dest = out_dir / f"{slug}.json"
+        dest.write_text(json.dumps(article, indent=2), encoding="utf-8")
+
+    print(f"[{source}] Saved {len(articles)} article(s)")
+    _cleanup_old_data(data_dir, meta["window_days"])
+
+
+# ---------------------------------------------------------------------------
+# Step-2 handler (implement / generate RSS)
+# ---------------------------------------------------------------------------
+
+async def _step2_generate_rss(source: str, meta: dict, data_dir: Path, test_version: int | None) -> None:
     articles = _load_articles(data_dir)
 
     rss, channel, atom_link = _build_rss(
         meta["title"], meta["link"], meta["description"], meta["self_href"],
     )
     _add_items(channel, articles)
-    feed_path = configured_feed_path("NINTENDO")
+    feed_path = configured_feed_path(source)
     feed_path.parent.mkdir(parents=True, exist_ok=True)
     _write_feed(rss, feed_path)
-    print(f"[NINTENDO] Feed updated: {len(articles)} item(s) -> {feed_path}")
+    print(f"[{source}] Feed updated: {len(articles)} item(s) -> {feed_path}")
 
     if test_version is not None:
-        test_name = f"feed_v{test_version}_nintendo.xml"
+        test_name = f"feed_v{test_version}_{source.lower()}.xml"
         atom_link.set("href", atom_link.get("href").rsplit("/", 1)[0] + "/" + test_name)
         for guid in channel.findall("item/guid"):
             guid.text += f"#v{test_version}"
         _write_feed(rss, Path(test_name))
 
 
-async def run_binance(test_version: int | None = None) -> None:
-    from binance.extractor import fetch_articles
+# ---------------------------------------------------------------------------
+# Step registries and generic feed runner
+# ---------------------------------------------------------------------------
 
-    meta = configured_feed_meta("BINANCE")
-    articles = await fetch_articles()
-    cutoff = date.today() - timedelta(days=meta["window_days"])
-    articles = [
-        article for article in articles
-        if date.fromisoformat(article["published_at"][:10]) >= cutoff
-    ]
-    articles.sort(key=lambda article: article["published_at"], reverse=True)
+STEP1_REGISTRY = {
+    "anthropic_api": _step1_anthropic_api,
+    "openai_rss": _step1_openai_rss,
+    "coinbase_playwright": _step1_coinbase_playwright,
+    "nintendo_playwright": _step1_nintendo_playwright,
+    "binance_api": _step1_binance_api,
+}
 
-    rss, channel, atom_link = _build_rss(
-        meta["title"], meta["link"], meta["description"], meta["self_href"],
-    )
-    _add_items(channel, articles)
-    feed_path = configured_feed_path("BINANCE")
-    feed_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_feed(rss, feed_path)
-    print(f"[BINANCE] Feed updated: {len(articles)} item(s) -> {feed_path}")
+STEP2_REGISTRY = {
+    "generate_rss": _step2_generate_rss,
+}
 
-    if test_version is not None:
-        test_name = f"feed_v{test_version}_binance.xml"
-        atom_link.set("href", atom_link.get("href").rsplit("/", 1)[0] + "/" + test_name)
-        for guid in channel.findall("item/guid"):
-            guid.text += f"#v{test_version}"
-        _write_feed(rss, Path(test_name))
+
+async def run_feed(source: str, test_version: int | None = None) -> None:
+    p = source.upper()
+    meta = configured_feed_meta(p)
+    data_dir = DATA_DIR / p
+
+    step1_name = os.environ.get(f"{p}_STEP1_HANDLER", "")
+    step2_name = os.environ.get(f"{p}_STEP2_HANDLER", "generate_rss")
+
+    step1 = STEP1_REGISTRY.get(step1_name)
+    step2 = STEP2_REGISTRY.get(step2_name)
+
+    if not step1:
+        raise RuntimeError(f"No step-1 handler '{step1_name}' for {p}; check {p}_STEP1_HANDLER env var")
+    if not step2:
+        raise RuntimeError(f"No step-2 handler '{step2_name}' for {p}; check {p}_STEP2_HANDLER env var")
+
+    await step1(p, meta, data_dir, test_version)
+    await step2(p, meta, data_dir, test_version)
 
 
 # ---------------------------------------------------------------------------
@@ -550,21 +526,18 @@ async def main(test_version: int | None = None, feed_only: bool = False) -> None
     if test_version is not None and test_version < 1:
         raise ValueError("Test feed version must be a positive integer")
 
-    failures: list[str] = []
-
-    sources = [
-        ("ANTHROPIC", run_anthropic),
-        ("OPENAI", run_openai),
-        ("COINBASE", run_coinbase),
-        ("NINTENDO", run_nintendo),
-        ("BINANCE", run_binance),
+    feed_sources_env = os.environ.get("FEED_SOURCES", "")
+    sources = feed_sources_env.split() if feed_sources_env else [
+        "ANTHROPIC", "OPENAI", "COINBASE", "NINTENDO", "BINANCE",
     ]
-    for name, run in sources:
+
+    failures: list[str] = []
+    for source in sources:
         try:
-            await run(test_version)
+            await run_feed(source, test_version)
         except Exception as exc:
-            print(f"\n[{name}] FAILED: {exc}", file=sys.stderr)
-            failures.append(name)
+            print(f"\n[{source}] FAILED: {exc}", file=sys.stderr)
+            failures.append(source)
 
     if failures:
         print(f"\nFailed sources: {', '.join(failures)}", file=sys.stderr)

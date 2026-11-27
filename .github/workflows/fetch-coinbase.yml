@@ -40,7 +40,7 @@ jobs:
         run: playwright install chromium --with-deps
 
       - name: Fetch Coinbase articles
-        run: python -c "import asyncio; from run_daily import run_coinbase; asyncio.run(run_coinbase())"
+        run: python -c "import asyncio; from run_daily import run_feed; asyncio.run(run_feed('COINBASE'))"
 
       - name: Commit articles
         run: |

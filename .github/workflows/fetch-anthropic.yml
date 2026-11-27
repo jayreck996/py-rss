@@ -40,7 +40,7 @@ jobs:
         run: playwright install chromium --with-deps
 
       - name: Fetch Anthropic articles
-        run: python -c "import asyncio; from run_daily import run_anthropic; asyncio.run(run_anthropic())"
+        run: python -c "import asyncio; from run_daily import run_feed; asyncio.run(run_feed('ANTHROPIC'))"
 
       - name: Commit articles
         run: |

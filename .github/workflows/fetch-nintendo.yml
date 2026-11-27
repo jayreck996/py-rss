@@ -40,7 +40,7 @@ jobs:
         run: playwright install chromium --with-deps
 
       - name: Fetch Nintendo articles
-        run: python -c "import asyncio; from run_daily import run_nintendo; asyncio.run(run_nintendo())"
+        run: python -c "import asyncio; from run_daily import run_feed; asyncio.run(run_feed('NINTENDO'))"
 
       - name: Commit articles
         run: |

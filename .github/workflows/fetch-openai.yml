@@ -40,7 +40,7 @@ jobs:
         run: playwright install chromium --with-deps
 
       - name: Fetch OpenAI articles
-        run: python -c "import asyncio; from run_daily import run_openai; asyncio.run(run_openai())"
+        run: python -c "import asyncio; from run_daily import run_feed; asyncio.run(run_feed('OPENAI'))"
 
       - name: Commit articles
         run: |
