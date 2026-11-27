@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Create a daily GitHub issue summarising today's commits using GitHub Models (gpt-4o-mini)."""
+"""Create a daily GitHub issue summarising today's commits using local Ollama (llama3.2:1b)."""
 
 import json
 import os
 import subprocess
 import sys
+import time
 import urllib.request
 from datetime import date
 
@@ -12,7 +13,13 @@ REPO = os.environ["GITHUB_REPOSITORY"]
 TOKEN = os.environ["GITHUB_TOKEN"]
 TODAY = date.today().isoformat()
 
-GITHUB_MODELS_ENDPOINT = "https://models.inference.ai.azure.com/chat/completions"
+OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
+
+
+def start_ollama() -> None:
+    subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(5)
+    subprocess.run(["ollama", "pull", "llama3.2:1b"], check=True)
 
 
 def fetch_commits() -> str:
@@ -25,7 +32,8 @@ def fetch_commits() -> str:
 
 def summarise(commits: str) -> str:
     payload = {
-        "model": "gpt-4o-mini",
+        "model": "llama3.2:1b",
+        "stream": False,
         "messages": [
             {
                 "role": "system",
@@ -40,24 +48,15 @@ def summarise(commits: str) -> str:
                 "content": f"Repository: {REPO}\nDate: {TODAY}\n\nCommits:\n{commits}",
             },
         ],
-        "max_tokens": 400,
-        "temperature": 0.3,
     }
-    # Use curl to bypass Python 3.14's DNS resolver which fails on this endpoint
-    result = subprocess.run(
-        [
-            "curl", "-sS", "--max-time", "30",
-            "-X", "POST", GITHUB_MODELS_ENDPOINT,
-            "-H", f"Authorization: Bearer {TOKEN}",
-            "-H", "Content-Type: application/json",
-            "-d", json.dumps(payload),
-        ],
-        capture_output=True, text=True, check=True,
+    req = urllib.request.Request(
+        OLLAMA_ENDPOINT,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
     )
-    data = json.loads(result.stdout)
-    if "error" in data:
-        raise RuntimeError(f"GitHub Models error: {data['error']}")
-    return data["choices"][0]["message"]["content"].strip()
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.load(resp)
+    return data["message"]["content"].strip()
 
 
 def create_issue(summary: str, commits: str) -> str:
@@ -89,6 +88,7 @@ def main() -> None:
         sys.exit(0)
 
     print(f"Found commits:\n{commits}\n")
+    start_ollama()
     summary = summarise(commits)
     print(f"Summary:\n{summary}\n")
     url = create_issue(summary, commits)
