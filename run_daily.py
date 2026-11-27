@@ -22,22 +22,31 @@ from xml.dom.minidom import parseString
 
 from bs4 import BeautifulSoup
 
-from ANTHROPIC.claude import CATEGORY_API, LISTING_URL as ANTHROPIC_URL, is_article_url, listing_resources
+from ANTHROPIC.claude import CATEGORY_API, is_article_url, listing_resources
 from COINBASE.extractor import discover_listing as coinbase_discover_listing
 from NINTENDO.extractor import discover_listing as nintendo_discover_listing
 
-WINDOW_DAYS = 7
 DATA_DIR = Path("data")
-
-OPENAI_RSS_URL = "https://openai.com/news/rss.xml"
 
 
 def configured_feed_path(source: str) -> Path:
     variable = f"{source.upper()}_FEED_PATH"
     value = os.environ.get(variable, "")
     if not value:
-        raise RuntimeError(f"{variable} is required; load YML/PY-RSS/YML.yml first")
+        raise RuntimeError(f"{variable} is required; load YML/PY-RSS/<feed>/YML.yml first")
     return Path(value)
+
+
+def configured_feed_meta(source: str) -> dict:
+    p = source.upper()
+    return {
+        "listing_url":   os.environ.get(f"{p}_LISTING_URL", ""),
+        "title":         os.environ.get(f"{p}_CHANNEL_TITLE", ""),
+        "link":          os.environ.get(f"{p}_CHANNEL_LINK", ""),
+        "description":   os.environ.get(f"{p}_CHANNEL_DESCRIPTION", ""),
+        "self_href":     os.environ.get(f"{p}_CHANNEL_SELF_HREF", ""),
+        "window_days":   int(os.environ.get(f"{p}_WINDOW_DAYS", "7")),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -154,8 +163,8 @@ def _load_articles(data_dir: Path) -> list[dict]:
 # ANTHROPIC runner
 # ---------------------------------------------------------------------------
 
-def _anthropic_read_listing() -> tuple[list, int]:
-    req = urllib.request.Request(ANTHROPIC_URL, headers={"User-Agent": "Mozilla/5.0"})
+def _anthropic_read_listing(listing_url: str) -> tuple[list, int]:
+    req = urllib.request.Request(listing_url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=30) as response:
         return listing_resources(response.read().decode("utf-8"))
 
@@ -173,9 +182,9 @@ def _anthropic_read_page(page_number: int) -> tuple[list, int]:
     return data["items"], data["total"]
 
 
-async def _discover_anthropic() -> list[str]:
-    items, total = _anthropic_read_listing()
-    cutoff = date.today() - timedelta(days=WINDOW_DAYS)
+async def _discover_anthropic(listing_url: str, window_days: int) -> list[str]:
+    items, total = _anthropic_read_listing(listing_url)
+    cutoff = date.today() - timedelta(days=window_days)
     urls: list[str] = []
     seen: set[str] = set()
     seen_pages: set[tuple] = set()
@@ -198,7 +207,7 @@ async def _discover_anthropic() -> list[str]:
             slug = item.get("slug")
             if not isinstance(slug, str):
                 continue
-            url = ANTHROPIC_URL + "/" + slug
+            url = listing_url + "/" + slug
             if is_article_url(url) and url not in seen:
                 seen.add(url)
                 urls.append(url)
@@ -212,13 +221,14 @@ async def _discover_anthropic() -> list[str]:
 async def run_anthropic(test_version: int | None = None) -> None:
     from ANTHROPIC.extractor import extract
 
+    meta = configured_feed_meta("ANTHROPIC")
     data_dir = DATA_DIR / "ANTHROPIC"
     if data_dir.exists():
         shutil.rmtree(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n[ANTHROPIC] Discovering: {ANTHROPIC_URL}")
-    urls = await _discover_anthropic()
+    print(f"\n[ANTHROPIC] Discovering: {meta['listing_url']}")
+    urls = await _discover_anthropic(meta["listing_url"], meta["window_days"])
     print(f"[ANTHROPIC] Found {len(urls)} links")
 
     today = date.today().isoformat()
@@ -233,8 +243,8 @@ async def run_anthropic(test_version: int | None = None) -> None:
                 article.published_at = date.today().isoformat()
             try:
                 pub_date = date.fromisoformat(article.published_at[:10])
-                if pub_date < date.today() - timedelta(days=WINDOW_DAYS):
-                    print(f"[ANTHROPIC]     Skipped (older than {WINDOW_DAYS} days)")
+                if pub_date < date.today() - timedelta(days=meta["window_days"]):
+                    print(f"[ANTHROPIC]     Skipped (older than {meta['window_days']} days)")
                     continue
             except ValueError:
                 pass
@@ -249,10 +259,7 @@ async def run_anthropic(test_version: int | None = None) -> None:
     articles = _load_articles(data_dir)
 
     rss, channel, atom_link = _build_rss(
-        "Claude Articles",
-        ANTHROPIC_URL,
-        "Latest Claude articles from Anthropic",
-        "https://jayreck996.github.io/py-rss/anthropic.xml",
+        meta["title"], meta["link"], meta["description"], meta["self_href"],
     )
     _add_items(channel, articles)
     feed_path = configured_feed_path("ANTHROPIC")
@@ -272,15 +279,15 @@ async def run_anthropic(test_version: int | None = None) -> None:
 # OPENAI runner
 # ---------------------------------------------------------------------------
 
-def _discover_openai() -> list[tuple[str, str, str]]:
+def _discover_openai(listing_url: str, window_days: int) -> list[tuple[str, str, str]]:
     req = urllib.request.Request(
-        OPENAI_RSS_URL,
+        listing_url,
         headers={"User-Agent": "Mozilla/5.0 (compatible; RSS reader)"},
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         content = resp.read()
     soup = BeautifulSoup(content, "xml")
-    cutoff = date.today() - timedelta(days=WINDOW_DAYS)
+    cutoff = date.today() - timedelta(days=window_days)
     seen: set[str] = set()
     items: list[tuple[str, str, str]] = []
     for item in soup.find_all("item"):
@@ -312,13 +319,14 @@ def _discover_openai() -> list[tuple[str, str, str]]:
 async def run_openai(test_version: int | None = None) -> None:
     from OPENAI.extractor import extract
 
+    meta = configured_feed_meta("OPENAI")
     data_dir = DATA_DIR / "OPENAI"
     if data_dir.exists():
         shutil.rmtree(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n[OPENAI] Discovering from RSS: {OPENAI_RSS_URL}")
-    found = _discover_openai()
+    print(f"\n[OPENAI] Discovering from RSS: {meta['listing_url']}")
+    found = _discover_openai(meta["listing_url"], meta["window_days"])
     print(f"[OPENAI] Found {len(found)} links")
     rss_dates = {url: pub_iso for url, pub_iso, _ in found}
     rss_titles = {url: title for url, _, title in found}
@@ -351,8 +359,8 @@ async def run_openai(test_version: int | None = None) -> None:
             if article.published_at:
                 try:
                     pub_date = date.fromisoformat(article.published_at[:10])
-                    if pub_date < date.today() - timedelta(days=WINDOW_DAYS):
-                        print(f"[OPENAI]     Skipped (older than {WINDOW_DAYS} days)")
+                    if pub_date < date.today() - timedelta(days=meta["window_days"]):
+                        print(f"[OPENAI]     Skipped (older than {meta['window_days']} days)")
                         continue
                 except ValueError:
                     pass
@@ -367,10 +375,7 @@ async def run_openai(test_version: int | None = None) -> None:
     articles = _load_articles(data_dir)
 
     rss, channel, atom_link = _build_rss(
-        "OpenAI News",
-        "https://openai.com/news/",
-        "Latest articles from OpenAI",
-        "https://jayreck996.github.io/py-rss/openai.xml",
+        meta["title"], meta["link"], meta["description"], meta["self_href"],
     )
     _add_items(channel, articles)
     feed_path = configured_feed_path("OPENAI")
@@ -393,12 +398,13 @@ async def run_openai(test_version: int | None = None) -> None:
 async def run_coinbase(test_version: int | None = None) -> None:
     from COINBASE.extractor import extract
 
+    meta = configured_feed_meta("COINBASE")
     data_dir = DATA_DIR / "COINBASE"
     if data_dir.exists():
         shutil.rmtree(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n[COINBASE] Discovering from: https://www.coinbase.com/blog")
+    print(f"\n[COINBASE] Discovering from: {meta['listing_url']}")
     found = await coinbase_discover_listing()
     print(f"[COINBASE] Found {len(found)} links")
 
@@ -414,8 +420,8 @@ async def run_coinbase(test_version: int | None = None) -> None:
                 article.published_at = date.today().isoformat()
             try:
                 pub_date = date.fromisoformat(article.published_at[:10])
-                if pub_date < date.today() - timedelta(days=WINDOW_DAYS):
-                    print(f"[COINBASE]     Skipped (older than {WINDOW_DAYS} days)")
+                if pub_date < date.today() - timedelta(days=meta["window_days"]):
+                    print(f"[COINBASE]     Skipped (older than {meta['window_days']} days)")
                     continue
             except ValueError:
                 pass
@@ -430,10 +436,7 @@ async def run_coinbase(test_version: int | None = None) -> None:
     articles = _load_articles(data_dir)
 
     rss, channel, atom_link = _build_rss(
-        "Coinbase Blog",
-        "https://www.coinbase.com/blog",
-        "Latest articles from Coinbase",
-        "https://jayreck996.github.io/py-rss/coinbase.xml",
+        meta["title"], meta["link"], meta["description"], meta["self_href"],
     )
     _add_items(channel, articles)
     feed_path = configured_feed_path("COINBASE")
@@ -453,18 +456,16 @@ async def run_coinbase(test_version: int | None = None) -> None:
 # NINTENDO runner
 # ---------------------------------------------------------------------------
 
-NINTENDO_LISTING_URL = "https://www.nintendo.com/au/news-and-articles/"
-
-
 async def run_nintendo(test_version: int | None = None) -> None:
     from NINTENDO.extractor import extract
 
+    meta = configured_feed_meta("NINTENDO")
     data_dir = DATA_DIR / "NINTENDO"
     if data_dir.exists():
         shutil.rmtree(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n[NINTENDO] Discovering from: {NINTENDO_LISTING_URL}")
+    print(f"\n[NINTENDO] Discovering from: {meta['listing_url']}")
     found = await nintendo_discover_listing()
     print(f"[NINTENDO] Found {len(found)} links")
 
@@ -480,8 +481,8 @@ async def run_nintendo(test_version: int | None = None) -> None:
                 article.published_at = date.today().isoformat()
             try:
                 pub_date = date.fromisoformat(article.published_at[:10])
-                if pub_date < date.today() - timedelta(days=WINDOW_DAYS):
-                    print(f"[NINTENDO]     Skipped (older than {WINDOW_DAYS} days)")
+                if pub_date < date.today() - timedelta(days=meta["window_days"]):
+                    print(f"[NINTENDO]     Skipped (older than {meta['window_days']} days)")
                     continue
             except ValueError:
                 pass
@@ -496,10 +497,7 @@ async def run_nintendo(test_version: int | None = None) -> None:
     articles = _load_articles(data_dir)
 
     rss, channel, atom_link = _build_rss(
-        "Nintendo AU News",
-        NINTENDO_LISTING_URL,
-        "Latest news and articles from Nintendo Australia",
-        "https://jayreck996.github.io/py-rss/nintendo.xml",
+        meta["title"], meta["link"], meta["description"], meta["self_href"],
     )
     _add_items(channel, articles)
     feed_path = configured_feed_path("NINTENDO")
@@ -516,10 +514,11 @@ async def run_nintendo(test_version: int | None = None) -> None:
 
 
 async def run_binance(test_version: int | None = None) -> None:
-    from binance.extractor import LISTING_URL, fetch_articles
+    from binance.extractor import fetch_articles
 
+    meta = configured_feed_meta("BINANCE")
     articles = await fetch_articles()
-    cutoff = date.today() - timedelta(days=WINDOW_DAYS)
+    cutoff = date.today() - timedelta(days=meta["window_days"])
     articles = [
         article for article in articles
         if date.fromisoformat(article["published_at"][:10]) >= cutoff
@@ -527,8 +526,7 @@ async def run_binance(test_version: int | None = None) -> None:
     articles.sort(key=lambda article: article["published_at"], reverse=True)
 
     rss, channel, atom_link = _build_rss(
-        "Binance Blog", LISTING_URL, "Latest articles from Binance",
-        "https://jayreck996.github.io/py-rss/binance.xml",
+        meta["title"], meta["link"], meta["description"], meta["self_href"],
     )
     _add_items(channel, articles)
     feed_path = configured_feed_path("BINANCE")

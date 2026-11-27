@@ -79,6 +79,24 @@ def load_outputs() -> dict[str, str]:
             raise ValueError(f"{source}.pages_name must be one XML filename")
         outputs[f"{source}_feed_path"] = output
         outputs[f"{source}_pages_name"] = pages_name
+
+        listing_url = feed.get("listing_url", "")
+        if listing_url and not listing_url.startswith("https://"):
+            raise ValueError(f"{source}.listing_url must start with https://")
+        outputs[f"{source}_listing_url"] = listing_url
+
+        channel = feed.get("channel", {})
+        for key in ("title", "link", "description", "self_href"):
+            value = channel.get(key, "")
+            if not isinstance(value, str):
+                raise ValueError(f"{source}.channel.{key} must be a string")
+            outputs[f"{source}_channel_{key}"] = value
+
+        window_days = feed.get("window_days", 7)
+        if not isinstance(window_days, int) or window_days < 1:
+            raise ValueError(f"{source}.window_days must be a positive integer")
+        outputs[f"{source}_window_days"] = str(window_days)
+
         feed_paths.append(output)
     outputs["feed_paths"] = " ".join(feed_paths)
     return outputs
