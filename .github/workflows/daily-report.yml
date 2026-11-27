@@ -8,7 +8,6 @@ on:
 permissions:
   contents: read
   issues: write
-  models: read
 
 jobs:
   report:
@@ -23,3 +22,4 @@ jobs:
         run: python3 .github/scripts/daily_report.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
