@@ -10,10 +10,11 @@ from datetime import date
 
 REPO = os.environ["GITHUB_REPOSITORY"]
 TOKEN = os.environ["GITHUB_TOKEN"]
+COPILOT_TOKEN = os.environ.get("GH_COPILOT_TOKEN", TOKEN)
 TODAY = date.today().isoformat()
-MODEL = os.environ.get("MODEL", "gpt-4o-mini")
+MODEL = os.environ.get("MODEL", "gpt-4o")
 
-GITHUB_MODELS_ENDPOINT = "https://models.inference.ai.azure.com/chat/completions"
+COPILOT_ENDPOINT = "https://api.githubcopilot.com/chat/completions"
 
 
 def fetch_commits() -> str:
@@ -45,11 +46,13 @@ def summarise(commits: str) -> str:
         ],
     }
     req = urllib.request.Request(
-        GITHUB_MODELS_ENDPOINT,
+        COPILOT_ENDPOINT,
         data=json.dumps(payload).encode(),
         headers={
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {TOKEN}",
+            "Authorization": f"Bearer {COPILOT_TOKEN}",
+            "Copilot-Integration-Id": "github-actions",
+            "Editor-Version": "github-actions/1.0",
         },
     )
     with urllib.request.urlopen(req, timeout=120) as resp:

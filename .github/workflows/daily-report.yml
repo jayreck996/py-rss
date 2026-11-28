@@ -6,13 +6,14 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: "GitHub Models model ID"
+        description: "Copilot model ID"
         required: false
-        default: "gpt-4o-mini"
+        default: "gpt-4o"
         type: choice
         options:
+          - gpt-4o
           - gpt-4o-mini
-          - Meta-Llama-3.1-70B-Instruct
+          - claude-3.5-sonnet
 
 permissions:
   contents: read
@@ -27,23 +28,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Probe Copilot chat endpoint (POST)
-        run: |
-          PAYLOAD='{"model":"gpt-4o","messages":[{"role":"user","content":"say hi"}],"max_tokens":5}'
-          echo "--- POST to api.githubcopilot.com/chat/completions ---"
-          curl -s -w "\nHTTP %{http_code}\n" \
-            -X POST \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Content-Type: application/json" \
-            -H "Copilot-Integration-Id: vscode-chat" \
-            -H "Editor-Version: vscode/1.95.0" \
-            -d "$PAYLOAD" \
-            https://api.githubcopilot.com/chat/completions || true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Create daily report issue
         run: python3 .github/scripts/daily_report.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MODEL: ${{ inputs.model || 'gpt-4o-mini' }}
+          GH_COPILOT_TOKEN: ${{ secrets.GH_COPILOT_TOKEN }}
+          MODEL: ${{ inputs.model || 'gpt-4o' }}
