@@ -78,6 +78,18 @@ async def extract(url: str, *, use_cache: bool = True) -> Article:
 
             body_text = extract_claude_body(html, url)
             if not body_text:
+                _soup_fb = BeautifulSoup(html, "lxml")
+                for _sel in ("main article", '[class*="rich-text"]',
+                             '[class*="article-body"]', "main"):
+                    _el = _soup_fb.select_one(_sel)
+                    if _el:
+                        for _dead in _el.find_all(["script", "style", "nav", "button"]):
+                            _dead.decompose()
+                        _fb = _el.decode_contents().strip()
+                        if len(_fb) > 200:
+                            body_text = _fb
+                            break
+            if not body_text:
                 raise ValueError("Claude structured article content was not found; article skipped")
         finally:
             await browser.close()
