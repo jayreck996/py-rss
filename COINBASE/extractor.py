@@ -52,12 +52,21 @@ async def extract(url: str, *, use_cache: bool = True) -> Article:
             html = await page.content()
             if snapshot_path := os.environ.get("ARTICLE_HTML_SNAPSHOT"):
                 Path(snapshot_path).write_text(html, encoding="utf-8")
+            _inner_text = ""
+            for _sel in ("article", "main"):
+                try:
+                    _t = await page.inner_text(_sel, timeout=3_000)
+                    if len(_t.strip()) > 200:
+                        _inner_text = _t.strip()
+                        break
+                except Exception:
+                    pass
         finally:
             await browser.close()
 
     soup = BeautifulSoup(html, "lxml")
 
-    body_text = _extract_body(html, soup, url)
+    body_text = _extract_body(html, soup, url, _inner_text)
     if not body_text:
         raise ValueError("Article content was not found; article skipped")
 
@@ -155,11 +164,13 @@ async def discover_listing() -> list[str]:
     return urls
 
 
-def _extract_body(html: str, soup: BeautifulSoup, base_url: str) -> Optional[str]:
+def _extract_body(html: str, soup: BeautifulSoup, base_url: str,
+                  inner_text: str = "") -> Optional[str]:
     rsc = _extract_rsc_body(html)
     if rsc:
         return rsc
-    for selector in ("article", "main article", '[class*="article"]', "main"):
+    for selector in ("article", "main article", '[class*="article"]',
+                     '[class*="prose"]', '[class*="content"]', "main"):
         el = soup.select_one(selector)
         if el:
             for tag in el.find_all(["script", "style", "nav", "header", "footer"]):
@@ -167,6 +178,10 @@ def _extract_body(html: str, soup: BeautifulSoup, base_url: str) -> Optional[str
             text = el.decode_contents().strip()
             if len(text) > 200:
                 return text
+    if inner_text:
+        paras = [p.strip() for p in inner_text.split("\n\n") if len(p.strip()) > 30]
+        if paras:
+            return "".join(f"<p>{p}</p>" for p in paras)
     return None
 
 
