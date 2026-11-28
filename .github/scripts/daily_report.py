@@ -1,25 +1,19 @@
 #!/usr/bin/env python3
-"""Create a daily GitHub issue summarising today's commits using local Ollama (llama3.2:1b)."""
+"""Create a daily GitHub issue summarising today's commits using GitHub Models API."""
 
 import json
 import os
 import subprocess
 import sys
-import time
 import urllib.request
 from datetime import date
 
 REPO = os.environ["GITHUB_REPOSITORY"]
 TOKEN = os.environ["GITHUB_TOKEN"]
 TODAY = date.today().isoformat()
+MODEL = os.environ.get("MODEL", "gpt-4o-mini")
 
-OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
-
-
-def start_ollama() -> None:
-    subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(5)
-    subprocess.run(["ollama", "pull", "llama3.2:1b"], check=True)
+GITHUB_MODELS_ENDPOINT = "https://models.inference.ai.azure.com/chat/completions"
 
 
 def fetch_commits() -> str:
@@ -32,8 +26,7 @@ def fetch_commits() -> str:
 
 def summarise(commits: str) -> str:
     payload = {
-        "model": "llama3.2:1b",
-        "stream": False,
+        "model": MODEL,
         "messages": [
             {
                 "role": "system",
@@ -52,13 +45,16 @@ def summarise(commits: str) -> str:
         ],
     }
     req = urllib.request.Request(
-        OLLAMA_ENDPOINT,
+        GITHUB_MODELS_ENDPOINT,
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {TOKEN}",
+        },
     )
     with urllib.request.urlopen(req, timeout=120) as resp:
         data = json.load(resp)
-    return data["message"]["content"].strip()
+    return data["choices"][0]["message"]["content"].strip()
 
 
 def create_issue(summary: str, commits: str) -> str:
@@ -90,7 +86,7 @@ def main() -> None:
         sys.exit(0)
 
     print(f"Found commits:\n{commits}\n")
-    start_ollama()
+    print(f"Using model: {MODEL}")
     summary = summarise(commits)
     print(f"Summary:\n{summary}\n")
     url = create_issue(summary, commits)

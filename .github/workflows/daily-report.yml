@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "0 2 * * *"  # 02:00 UTC daily, after all fetch workflows complete
   workflow_dispatch:
+    inputs:
+      model:
+        description: "GitHub Models model ID"
+        required: false
+        default: "gpt-4o-mini"
+        type: choice
+        options:
+          - gpt-4o-mini
+          - Meta-Llama-3.1-70B-Instruct
 
 permissions:
   contents: read
@@ -18,10 +27,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Ollama
-        run: curl -fsSL https://ollama.com/install.sh | sh
-
       - name: Create daily report issue
         run: python3 .github/scripts/daily_report.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODEL: ${{ inputs.model || 'gpt-4o-mini' }}
