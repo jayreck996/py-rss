@@ -51,12 +51,17 @@ def summarise(commits: str) -> str:
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {COPILOT_TOKEN}",
-            "Copilot-Integration-Id": "github-actions",
-            "Editor-Version": "github-actions/1.0",
+            "Copilot-Integration-Id": "vscode-chat",
+            "Editor-Version": "vscode/1.95.0",
+            "Editor-Plugin-Version": "copilot-chat/0.22.4",
         },
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.load(resp)
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Copilot API error {e.code}: {body}") from e
     return data["choices"][0]["message"]["content"].strip()
 
 
