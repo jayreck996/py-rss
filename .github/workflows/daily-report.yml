@@ -27,6 +27,23 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Probe GitHub Models endpoints
+        run: |
+          echo "=== DNS checks ==="
+          nslookup models.inference.ai.azure.com || echo "DNS FAIL: models.inference.ai.azure.com"
+          nslookup models.github.com || echo "DNS FAIL: models.github.com"
+          echo "=== HTTP checks ==="
+          curl -s -o /dev/null -w "models.inference.ai.azure.com -> %{http_code}\n" \
+            https://models.inference.ai.azure.com || true
+          curl -s -o /dev/null -w "api.github.com/models -> %{http_code}\n" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            https://api.github.com/models || true
+          curl -s -o /dev/null -w "models.github.com -> %{http_code}\n" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            https://models.github.com || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create daily report issue
         run: python3 .github/scripts/daily_report.py
         env:
