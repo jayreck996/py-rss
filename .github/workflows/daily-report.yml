@@ -27,31 +27,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Probe GitHub Models endpoints
+      - name: Probe Copilot chat endpoint (POST)
         run: |
-          probe() {
-            local label="$1" url="$2"
-            shift 2
-            code=$(curl -s -o /dev/null -w "%{http_code}" "$@" "$url" 2>/dev/null || echo "000")
-            echo "$label -> $code"
-          }
-          AUTH="-H Authorization: Bearer $GITHUB_TOKEN"
-          probe "api.githubcopilot.com/chat/completions" \
-            "https://api.githubcopilot.com/chat/completions" \
-            -H "Authorization: Bearer $GITHUB_TOKEN"
-          probe "api.github.com/copilot/chat/completions" \
-            "https://api.github.com/copilot/chat/completions" \
-            -H "Authorization: Bearer $GITHUB_TOKEN"
-          probe "api.github.com/copilot/v1/engines/copilot-codex/completions" \
-            "https://api.github.com/copilot/v1/engines/copilot-codex/completions" \
-            -H "Authorization: Bearer $GITHUB_TOKEN"
-          probe "api.github.com/models/inference" \
-            "https://api.github.com/models/inference" \
-            -H "Authorization: Bearer $GITHUB_TOKEN"
-          echo "=== Copilot token endpoint ==="
-          curl -s -o /dev/null -w "copilot token endpoint -> %{http_code}\n" \
+          PAYLOAD='{"model":"gpt-4o","messages":[{"role":"user","content":"say hi"}],"max_tokens":5}'
+          echo "--- POST to api.githubcopilot.com/chat/completions ---"
+          curl -s -w "\nHTTP %{http_code}\n" \
+            -X POST \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
-            https://api.github.com/copilot_internal/v2/token || true
+            -H "Content-Type: application/json" \
+            -H "Copilot-Integration-Id: vscode-chat" \
+            -H "Editor-Version: vscode/1.95.0" \
+            -d "$PAYLOAD" \
+            https://api.githubcopilot.com/chat/completions || true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
