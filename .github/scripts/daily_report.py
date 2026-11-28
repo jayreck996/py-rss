@@ -1,20 +1,33 @@
 #!/usr/bin/env python3
-"""Create a daily GitHub issue summarising today's commits using GitHub Models API."""
+"""Create a daily GitHub issue summarising today's commits using local Ollama (llama3.2:1b)."""
 
 import json
 import os
 import subprocess
 import sys
+import time
 import urllib.request
 from datetime import date
 
 REPO = os.environ["GITHUB_REPOSITORY"]
 TOKEN = os.environ["GITHUB_TOKEN"]
-COPILOT_TOKEN = os.environ.get("GH_COPILOT_TOKEN", TOKEN)
 TODAY = date.today().isoformat()
-MODEL = os.environ.get("MODEL", "gpt-4o")
+MODEL = os.environ.get("MODEL", "llama3.2:1b")
 
-COPILOT_ENDPOINT = "https://api.githubcopilot.com/chat/completions"
+OLLAMA_ENDPOINT = "http://localhost:11434/api/chat"
+
+
+def start_ollama() -> None:
+    subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(30):
+        try:
+            urllib.request.urlopen("http://localhost:11434", timeout=2)
+            break
+        except Exception:
+            time.sleep(2)
+    else:
+        raise RuntimeError("Ollama did not start within 60 seconds")
+    subprocess.run(["ollama", "pull", MODEL], check=True)
 
 
 def fetch_commits() -> str:
@@ -28,6 +41,7 @@ def fetch_commits() -> str:
 def summarise(commits: str) -> str:
     payload = {
         "model": MODEL,
+        "stream": False,
         "messages": [
             {
                 "role": "system",
@@ -46,23 +60,13 @@ def summarise(commits: str) -> str:
         ],
     }
     req = urllib.request.Request(
-        COPILOT_ENDPOINT,
+        OLLAMA_ENDPOINT,
         data=json.dumps(payload).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {COPILOT_TOKEN}",
-            "Copilot-Integration-Id": "vscode-chat",
-            "Editor-Version": "vscode/1.95.0",
-            "Editor-Plugin-Version": "copilot-chat/0.22.4",
-        },
+        headers={"Content-Type": "application/json"},
     )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.load(resp)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Copilot API error {e.code}: {body}") from e
-    return data["choices"][0]["message"]["content"].strip()
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.load(resp)
+    return data["message"]["content"].strip()
 
 
 def create_issue(summary: str, commits: str) -> str:
@@ -94,7 +98,7 @@ def main() -> None:
         sys.exit(0)
 
     print(f"Found commits:\n{commits}\n")
-    print(f"Using model: {MODEL}")
+    start_ollama()
     summary = summarise(commits)
     print(f"Summary:\n{summary}\n")
     url = create_issue(summary, commits)

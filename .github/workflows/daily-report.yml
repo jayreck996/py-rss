@@ -6,14 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: "Copilot model ID"
+        description: "Ollama model"
         required: false
-        default: "gpt-4o"
+        default: "llama3.2:1b"
         type: choice
         options:
-          - gpt-4o
-          - gpt-4o-mini
-          - claude-3.5-sonnet
+          - llama3.2:1b
+          - llama3.2:3b
 
 permissions:
   contents: read
@@ -28,9 +27,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
       - name: Create daily report issue
         run: python3 .github/scripts/daily_report.py
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_COPILOT_TOKEN: ${{ secrets.GH_COPILOT_TOKEN }}
-          MODEL: ${{ inputs.model || 'gpt-4o' }}
+          MODEL: ${{ inputs.model || 'llama3.2:1b' }}
